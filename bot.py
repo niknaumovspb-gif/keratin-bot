@@ -408,7 +408,7 @@ async def show_portfolio(message: Message):
         # Получаем последнее сообщение чтобы узнать максимальный ID
         chat = await bot.get_chat(PORTFOLIO_CHANNEL)
         # Пробуем переслать последние сообщения
-        for msg_id in range(1, 50):
+        for msg_id in range(3, 53):
             try:
                 await bot.copy_message(
                     chat_id=message.chat.id,
