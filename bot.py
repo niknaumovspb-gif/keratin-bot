@@ -281,7 +281,7 @@ async def get_available_slots(d: date, period: str = None):
     elif period == "day":
         p_start, p_end = max(start_hour * 60, 13 * 60), 16 * 60
     elif period == "evening":
-        p_start, p_end = max(start_hour * 60, 16 * 60), 19 * 60 + 30
+        p_start, p_end = max(start_hour * 60, 16 * 60), 20 * 60
     else:
         p_start = start_hour * 60
         p_end = (DAY_END - SLOT_DURATION) * 60
@@ -306,7 +306,7 @@ async def get_available_periods(d: date):
     periods = []
     for p, label in [("morning", "🌅 Утро (10:00–13:00)"),
                      ("day",     "☀️ День (13:00–16:00)"),
-                     ("evening", "🌆 Вечер (16:00–19:30)")]:
+                     ("evening", "🌆 Вечер (16:00–20:00)")]:
         slots = await get_available_slots(d, period=p)
         if slots:
             periods.append((p, label))
