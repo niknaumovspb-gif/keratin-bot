@@ -9,7 +9,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -263,8 +263,7 @@ def fmt_price(p: int):
     return "бесплатно" if p == 0 else f"{p:,} ₽".replace(",", " ")
 
 # ── НАПОМИНАНИЯ ───────────────────────────────────────────────────────────────
-jobstores = {"default": SQLAlchemyJobStore(url=DATABASE_URL.replace("postgres://","postgresql://"))} if DATABASE_URL else {}
-scheduler = AsyncIOScheduler(timezone="Europe/Moscow", jobstores=jobstores)
+scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
 def schedule_reminders(booking_id: str, b: dict):
     visit_dt = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M")
@@ -671,10 +670,24 @@ async def admin_blocked_list(callback: CallbackQuery):
     await callback.message.edit_text(text, parse_mode="HTML")
 
 # ── ЗАПУСК ────────────────────────────────────────────────────────────────────
+async def restore_reminders():
+    all_b = db_get_all_bookings()
+    now = datetime.now()
+    for b in all_b:
+        try:
+            visit_dt = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M")
+            if visit_dt > now:
+                schedule_reminders(b["id"], b)
+        except Exception as e:
+            logging.error(f"Restore reminder error: {e}")
+    logging.info(f"Restored {len(all_b)} reminders")
+
 async def main():
     init_db()
     scheduler.start()
+    await restore_reminders()
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
+# patch main
