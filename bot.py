@@ -13,8 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-import psycopg2
-import psycopg2.extras
+import asyncpg
 import os
 import json
 
@@ -71,96 +70,96 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
-# ── БАЗА ДАННЫХ ───────────────────────────────────────────────────────────────
-def get_db():
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+# ── БАЗА ДАННЫХ (asyncpg) ─────────────────────────────────────────────────────
+_pool = None
 
-def init_db():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS bookings (
-                    id TEXT PRIMARY KEY,
-                    user_id BIGINT,
-                    service TEXT,
-                    date TEXT,
-                    time TEXT,
-                    price INTEGER,
-                    name TEXT,
-                    contact TEXT,
-                    thickness TEXT,
-                    date_display TEXT,
-                    status TEXT DEFAULT 'active',
-                    created_at TIMESTAMP DEFAULT NOW()
-                );
-                CREATE TABLE IF NOT EXISTS blocked_dates (
-                    date TEXT PRIMARY KEY,
-                    reason TEXT,
-                    created_at TIMESTAMP DEFAULT NOW()
-                );
-            """)
-        conn.commit()
+async def get_pool():
+    global _pool
+    if _pool is None:
+        url = DATABASE_URL.replace("postgres://", "postgresql://")
+        _pool = await asyncpg.create_pool(url, min_size=1, max_size=5)
+    return _pool
 
-def db_save_booking(booking_id: str, b: dict):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO bookings (id, user_id, service, date, time, price, name, contact, thickness, date_display)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (id) DO NOTHING
-            """, (booking_id, b["user_id"], b["service"], b["date"], b["time"],
-                  b["price"], b["name"], b["contact"], b.get("thickness",""), b.get("date_display","")))
-        conn.commit()
+async def init_db():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS bookings (
+                id TEXT PRIMARY KEY,
+                user_id BIGINT,
+                service TEXT,
+                date TEXT,
+                time TEXT,
+                price INTEGER,
+                name TEXT,
+                contact TEXT,
+                thickness TEXT,
+                date_display TEXT,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+            CREATE TABLE IF NOT EXISTS blocked_dates (
+                date TEXT PRIMARY KEY,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            );
+        """)
 
-def db_cancel_booking(booking_id: str):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE bookings SET status='cancelled' WHERE id=%s RETURNING *", (booking_id,))
-            row = cur.fetchone()
-        conn.commit()
+async def db_save_booking(booking_id: str, b: dict):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO bookings (id, user_id, service, date, time, price, name, contact, thickness, date_display)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+            ON CONFLICT (id) DO NOTHING
+        """, booking_id, b["user_id"], b["service"], b["date"], b["time"],
+             b["price"], b["name"], b["contact"], b.get("thickness",""), b.get("date_display",""))
+
+async def db_cancel_booking(booking_id: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("UPDATE bookings SET status='cancelled' WHERE id=$1 RETURNING *", booking_id)
     return dict(row) if row else None
 
-def db_get_user_bookings(user_id: int):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM bookings WHERE user_id=%s AND status='active' ORDER BY date,time", (user_id,))
-            return [dict(r) for r in cur.fetchall()]
+async def db_get_user_bookings(user_id: int):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' ORDER BY date,time", user_id)
+    return [dict(r) for r in rows]
 
-def db_get_all_bookings():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM bookings WHERE status='active' ORDER BY date,time")
-            return [dict(r) for r in cur.fetchall()]
+async def db_get_all_bookings():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM bookings WHERE status='active' ORDER BY date,time")
+    return [dict(r) for r in rows]
 
-def db_get_booked_slots(d: date):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT time FROM bookings WHERE date=%s AND status='active'", (str(d),))
-            return {int(r["time"].split(":")[0]) for r in cur.fetchall()}
+async def db_get_booked_slots(d: date):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT time FROM bookings WHERE date=$1 AND status='active'", str(d))
+    return {int(r["time"].split(":")[0]) for r in rows}
 
-def db_is_blocked(d: date):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM blocked_dates WHERE date=%s", (str(d),))
-            return cur.fetchone() is not None
+async def db_is_blocked(d: date):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT 1 FROM blocked_dates WHERE date=$1", str(d))
+    return row is not None
 
-def db_block_date(d: str, reason: str):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("INSERT INTO blocked_dates (date,reason) VALUES (%s,%s) ON CONFLICT DO NOTHING", (d, reason))
-        conn.commit()
+async def db_block_date(d: str, reason: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("INSERT INTO blocked_dates (date,reason) VALUES ($1,$2) ON CONFLICT DO NOTHING", d, reason)
 
-def db_unblock_date(d: str):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM blocked_dates WHERE date=%s", (d,))
-        conn.commit()
+async def db_unblock_date(d: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM blocked_dates WHERE date=$1", d)
 
-def db_get_blocked_dates():
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT date, reason FROM blocked_dates ORDER BY date")
-            return [dict(r) for r in cur.fetchall()]
+async def db_get_blocked_dates():
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT date, reason FROM blocked_dates ORDER BY date")
+    return [dict(r) for r in rows]
 
 # ── GOOGLE CALENDAR ───────────────────────────────────────────────────────────
 def get_gcal_service():
@@ -230,12 +229,12 @@ def save_to_sheets(b: dict):
         logging.error(f"Sheets error: {e}")
 
 # ── ХЕЛПЕРЫ ───────────────────────────────────────────────────────────────────
-def get_dates(offset=0):
+async def get_dates(offset=0):
     dates, count, i = [], 0, 1
     today = datetime.now().date()
     while len(dates) < 14:
         d = today + timedelta(days=i)
-        if d.weekday() in SCHEDULE and not db_is_blocked(d):
+        if d.weekday() in SCHEDULE and not await db_is_blocked(d):
             count += 1
             if count > offset:
                 dates.append(d)
@@ -244,11 +243,11 @@ def get_dates(offset=0):
             break
     return dates
 
-def get_available_slots(d: date):
+async def get_available_slots(d: date):
     start_hour = SCHEDULE.get(d.weekday())
-    if start_hour is None or db_is_blocked(d):
+    if start_hour is None or await db_is_blocked(d):
         return []
-    booked = db_get_booked_slots(d)
+    booked = await db_get_booked_slots(d)
     last_start = DAY_END - SLOT_DURATION
     return [f"{h:02d}:00" for h in range(start_hour, last_start + 1)
             if not any(abs(h - bs) < SLOT_DURATION for bs in booked)]
@@ -357,7 +356,7 @@ async def how_to_get(message: Message):
 @dp.message(Command("mybookings"))
 async def my_bookings(message: Message):
     uid = message.from_user.id
-    ub  = db_get_user_bookings(uid)
+    ub  = await db_get_user_bookings(uid)
     if not ub:
         await message.answer("У вас пока нет записей.", reply_markup=get_kb(uid))
         return
@@ -373,7 +372,7 @@ async def my_bookings(message: Message):
 @dp.callback_query(F.data.startswith("cancel_") & ~F.data.startswith("cancel_admin_"))
 async def cancel_booking(callback: CallbackQuery):
     booking_id = callback.data[7:]
-    b = db_cancel_booking(booking_id)
+    b = await db_cancel_booking(booking_id)
     if b:
         d = datetime.strptime(b["date"], "%Y-%m-%d").date()
         gcal_delete_event(b)
@@ -459,7 +458,7 @@ async def choose_other(callback: CallbackQuery, state: FSMContext):
     await show_dates(callback, state)
 
 async def show_dates(callback: CallbackQuery, state: FSMContext, offset: int = 0):
-    dates = get_dates(offset=offset)
+    dates = await get_dates(offset=offset)
     kb    = InlineKeyboardBuilder()
     for d in dates:
         kb.button(text=fmt_date(d), callback_data=f"date_{d}")
@@ -480,7 +479,7 @@ async def choose_time(callback: CallbackQuery, state: FSMContext):
     date_str = callback.data[5:]
     d = datetime.strptime(date_str, "%Y-%m-%d").date()
     await state.update_data(date=date_str, date_display=fmt_date(d))
-    slots = get_available_slots(d)
+    slots = await get_available_slots(d)
     if not slots:
         await callback.answer("На этот день нет свободного времени.", show_alert=True)
         return
@@ -525,7 +524,7 @@ async def finalize(message: Message, state: FSMContext):
         "date_display": data.get("date_display", ""),
     }
     booking_id = f"{b['date']}_{b['time']}_{b['user_id']}"
-    db_save_booking(booking_id, b)
+    await db_save_booking(booking_id, b)
     schedule_reminders(booking_id, b)
     save_to_sheets(b)
     gcal_add_event(b)
@@ -571,7 +570,7 @@ async def admin_panel(message: Message):
 @dp.callback_query(F.data == "admin_all_bookings")
 async def admin_all_bookings(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
-    bookings = db_get_all_bookings()
+    bookings = await db_get_all_bookings()
     if not bookings:
         await callback.message.edit_text("Записей нет.")
         return
@@ -595,7 +594,7 @@ async def admin_all_bookings(callback: CallbackQuery):
 async def admin_cancel_booking(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
     booking_id = callback.data[13:]
-    b = db_cancel_booking(booking_id)
+    b = await db_cancel_booking(booking_id)
     if b:
         d = datetime.strptime(b["date"], "%Y-%m-%d").date()
         gcal_delete_event(b)
@@ -647,18 +646,18 @@ async def admin_process_date(message: Message, state: FSMContext):
         await message.answer("❌ Неверный формат. Введите дату как ДД.ММ.ГГГГ")
         return
     if action == "block":
-        db_block_date(str(d), reason)
+        await db_block_date(str(d), reason)
         await message.answer(f"🚫 День {fmt_date(d)} заблокирован{' — ' + reason if reason else ''}.",
                              reply_markup=admin_kb())
     else:
-        db_unblock_date(str(d))
+        await db_unblock_date(str(d))
         await message.answer(f"✅ День {fmt_date(d)} разблокирован.", reply_markup=admin_kb())
     await state.clear()
 
 @dp.callback_query(F.data == "admin_blocked_list")
 async def admin_blocked_list(callback: CallbackQuery):
     if callback.from_user.id != ADMIN_ID: return
-    blocked = db_get_blocked_dates()
+    blocked = await db_get_blocked_dates()
     if not blocked:
         await callback.message.edit_text("Нет заблокированных дней.")
         return
@@ -671,7 +670,7 @@ async def admin_blocked_list(callback: CallbackQuery):
 
 # ── ЗАПУСК ────────────────────────────────────────────────────────────────────
 async def restore_reminders():
-    all_b = db_get_all_bookings()
+    all_b = await db_get_all_bookings()
     now = datetime.now()
     for b in all_b:
         try:
@@ -683,7 +682,7 @@ async def restore_reminders():
     logging.info(f"Restored {len(all_b)} reminders")
 
 async def main():
-    init_db()
+    await init_db()
     scheduler.start()
     await restore_reminders()
     await dp.start_polling(bot)
