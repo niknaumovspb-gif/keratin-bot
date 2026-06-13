@@ -24,7 +24,6 @@ GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON", "")
 SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID", "")
 CALENDAR_ID       = os.getenv("CALENDAR_ID", "")   # ID вашего Google Calendar
 DATABASE_URL      = os.getenv("DATABASE_URL", "")
-PORTFOLIO_CHANNEL = -1004425193962  # ID канала с портфолио
 CARE_PDF_PATH     = "/app/care.pdf"  # путь к PDF инструкции по уходу
 
 ADDRESS     = "📍 Крыленко 14 стр3, домофон 116, этаж 8"
@@ -359,7 +358,6 @@ def admin_kb():
     kb.button(text="💰 Прайс")
     kb.button(text="📋 Мои записи")
     kb.button(text="🗺 Как пройти")
-    kb.button(text="📸 Портфолио")
     kb.button(text="👑 Админ-панель")
     kb.adjust(2)
     return kb.as_markup(resize_keyboard=True)
@@ -397,34 +395,6 @@ async def how_to_get(message: Message):
         reply_markup=kb.as_markup(), parse_mode="HTML")
     # await message.answer_photo(photo=ENTRY_PHOTO, caption="Вход в подъезд")
 
-
-# ── ПОРТФОЛИО ─────────────────────────────────────────────────────────────────
-@dp.message(F.text == "📸 Портфолио")
-async def show_portfolio(message: Message):
-    try:
-        await message.answer("📸 <b>Портфолио работ</b>\n\nЗагружаю...", parse_mode="HTML")
-        count = 0
-        # Перебираем последние 30 сообщений канала по ID (ищем фото)
-        # Получаем последнее сообщение чтобы узнать максимальный ID
-        chat = await bot.get_chat(PORTFOLIO_CHANNEL)
-        # Пробуем переслать последние сообщения
-        for msg_id in range(3, 53):
-            try:
-                await bot.copy_message(
-                    chat_id=message.chat.id,
-                    from_chat_id=PORTFOLIO_CHANNEL,
-                    message_id=msg_id
-                )
-                count += 1
-                if count >= 10:
-                    break
-            except Exception:
-                continue
-        if count == 0:
-            await message.answer("📸 Портфолио пока пустое — скоро добавим работы!")
-    except Exception as e:
-        logging.error(f"Portfolio error: {e}")
-        await message.answer("📸 Портфолио временно недоступно.")
 
 # ── ПОДТВЕРЖДЕНИЕ ЗАПИСИ ──────────────────────────────────────────────────────
 @dp.callback_query(F.data.startswith("confirm_yes_"))
