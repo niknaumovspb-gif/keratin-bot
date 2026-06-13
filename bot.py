@@ -36,7 +36,8 @@ YANDEX_URL  = f"https://yandex.ru/maps/?pt={ADDRESS_LON},{ADDRESS_LAT}&z=17&l=ma
 
 SCHEDULE = {0: 18, 1: 18, 2: 18, 3: 18, 4: 10, 5: 10, 6: 10}
 DAY_END       = 24
-SLOT_DURATION = 5
+SLOT_DURATION = 5  # часов занимает процедура
+SLOT_STEP     = 30  # минут — шаг слотов
 
 KERATIN_PRICES = {
     30: {"price": 4000, "hours": 3}, 35: {"price": 4500, "hours": 3},
@@ -62,6 +63,7 @@ class BookingStates(StatesGroup):
     choosing_length    = State()
     choosing_thickness = State()
     choosing_date      = State()
+    choosing_period    = State()
     choosing_time      = State()
     entering_contact   = State()
 
@@ -144,6 +146,17 @@ async def db_get_booked_slots(d: date):
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT time FROM bookings WHERE date=$1 AND status='active'", str(d))
     return {int(r["time"].split(":")[0]) for r in rows}
+
+async def db_get_booked_slots_minutes(d: date):
+    """Возвращает множество занятых слотов в минутах от полуночи"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT time FROM bookings WHERE date=$1 AND status='active'", str(d))
+    result = set()
+    for r in rows:
+        h, m = map(int, r["time"].split(":"))
+        result.add(h * 60 + m)
+    return result
 
 async def db_is_blocked(d: date):
     pool = await get_pool()
@@ -255,14 +268,49 @@ async def get_dates(offset=0):
             break
     return dates
 
-async def get_available_slots(d: date):
+async def get_available_slots(d: date, period: str = None):
+    """period: 'morning' 10-13, 'day' 13-16, 'evening' 16-19:30"""
     start_hour = SCHEDULE.get(d.weekday())
     if start_hour is None or await db_is_blocked(d):
         return []
-    booked = await db_get_booked_slots(d)
-    last_start = DAY_END - SLOT_DURATION
-    return [f"{h:02d}:00" for h in range(start_hour, last_start + 1)
-            if not any(abs(h - bs) < SLOT_DURATION for bs in booked)]
+    booked = await db_get_booked_slots_minutes(d)  # множество занятых минут от полуночи
+
+    # Диапазон периода
+    if period == "morning":
+        p_start, p_end = max(start_hour * 60, 10 * 60), 13 * 60
+    elif period == "day":
+        p_start, p_end = max(start_hour * 60, 13 * 60), 16 * 60
+    elif period == "evening":
+        p_start, p_end = max(start_hour * 60, 16 * 60), 19 * 60 + 30
+    else:
+        p_start = start_hour * 60
+        p_end = (DAY_END - SLOT_DURATION) * 60
+
+    slots = []
+    t = p_start
+    while t <= p_end:
+        # Проверяем что слот не пересекается с занятыми
+        conflict = any(
+            abs(t - bm) < SLOT_DURATION * 60
+            for bm in booked
+        )
+        if not conflict:
+            h, m = divmod(t, 60)
+            if h < 24:
+                slots.append(f"{h:02d}:{m:02d}")
+        t += SLOT_STEP
+    return slots
+
+async def get_available_periods(d: date):
+    """Возвращает периоды где есть хотя бы один свободный слот"""
+    periods = []
+    for p, label in [("morning", "🌅 Утро (10:00–13:00)"),
+                     ("day",     "☀️ День (13:00–16:00)"),
+                     ("evening", "🌆 Вечер (16:00–19:30)")]:
+        slots = await get_available_slots(d, period=p)
+        if slots:
+            periods.append((p, label))
+    return periods
 
 def fmt_date(d: date):
     months = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"]
@@ -604,21 +652,41 @@ async def dates_next(callback: CallbackQuery, state: FSMContext):
     await show_dates(callback, state, offset=14)
 
 @dp.callback_query(F.data.startswith("date_"))
-async def choose_time(callback: CallbackQuery, state: FSMContext):
+async def choose_period(callback: CallbackQuery, state: FSMContext):
     date_str = callback.data[5:]
     d = datetime.strptime(date_str, "%Y-%m-%d").date()
     await state.update_data(date=date_str, date_display=fmt_date(d))
-    slots = await get_available_slots(d)
-    if not slots:
+    periods = await get_available_periods(d)
+    if not periods:
         await callback.answer("На этот день нет свободного времени.", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    for p, label in periods:
+        kb.button(text=label, callback_data=f"period_{p}")
+    kb.adjust(1)
+    await state.set_state(BookingStates.choosing_period)
+    await callback.message.edit_text(
+        f"⏰ <b>Когда вам удобно {fmt_date(d)}?</b>",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("period_"))
+async def choose_time(callback: CallbackQuery, state: FSMContext):
+    period = callback.data[7:]
+    data = await state.get_data()
+    d = datetime.strptime(data["date"], "%Y-%m-%d").date()
+    slots = await get_available_slots(d, period=period)
+    if not slots:
+        await callback.answer("В это время нет свободных слотов.", show_alert=True)
         return
     kb = InlineKeyboardBuilder()
     for s in slots:
         kb.button(text=s, callback_data=f"time_{s}")
+    kb.button(text="◀️ Другое время", callback_data=f"date_{data['date']}")
     kb.adjust(3)
     await state.set_state(BookingStates.choosing_time)
-    await callback.message.edit_text(f"⏰ <b>Время на {fmt_date(d)}:</b>",
-                                     reply_markup=kb.as_markup(), parse_mode="HTML")
+    await callback.message.edit_text(
+        f"⏰ <b>Выберите время:</b>",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("time_"))
 async def ask_contact(callback: CallbackQuery, state: FSMContext):
@@ -722,16 +790,30 @@ async def reschedule_date(callback: CallbackQuery, state: FSMContext):
     date_str = callback.data[7:]
     d = datetime.strptime(date_str, "%Y-%m-%d").date()
     await state.update_data(new_date=date_str, new_date_display=fmt_date(d))
-    slots = get_available_slots(d)
-    if not slots:
+    periods = await get_available_periods(d)
+    if not periods:
         await callback.answer("На этот день нет свободного времени.", show_alert=True)
         return
     kb = InlineKeyboardBuilder()
+    for p, label in periods:
+        kb.button(text=label, callback_data=f"reperiod_{p}")
+    kb.adjust(1)
+    await state.set_state(RescheduleStates.choosing_time)
+    await callback.message.edit_text(f"⏰ <b>Когда вам удобно {fmt_date(d)}?</b>",
+                                     reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("reperiod_"))
+async def reschedule_period(callback: CallbackQuery, state: FSMContext):
+    period = callback.data[9:]
+    data = await state.get_data()
+    d = datetime.strptime(data["new_date"], "%Y-%m-%d").date()
+    slots = await get_available_slots(d, period=period)
+    kb = InlineKeyboardBuilder()
     for s in slots:
         kb.button(text=s, callback_data=f"retime_{s}")
+    kb.button(text="◀️ Другое время", callback_data=f"redate_{data['new_date']}")
     kb.adjust(3)
-    await state.set_state(RescheduleStates.choosing_time)
-    await callback.message.edit_text(f"⏰ <b>Выберите новое время на {fmt_date(d)}:</b>",
+    await callback.message.edit_text("⏰ <b>Выберите время:</b>",
                                      reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("retime_"))
