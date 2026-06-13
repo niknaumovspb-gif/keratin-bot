@@ -25,6 +25,8 @@ SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID", "")
 CALENDAR_ID       = os.getenv("CALENDAR_ID", "")   # ID вашего Google Calendar
 DATABASE_URL      = os.getenv("DATABASE_URL", "")
 CARE_PDF_PATH     = "/app/care.pdf"  # путь к PDF инструкции по уходу
+YANDEX_REVIEWS    = "https://yandex.ru/maps/org/keratin_botoks/142698359718/reviews/?l=carparks&ll=30.465482%2C59.895773&source=serp_navig&z=16"
+VK_REVIEWS        = "https://vk.ru/club211270509?w=reviews"
 
 ADDRESS     = "📍 Крыленко 14 стр3, домофон 116, этаж 8"
 ADDRESS_LAT = 59.895772
@@ -65,6 +67,10 @@ class BookingStates(StatesGroup):
 
 class AdminStates(StatesGroup):
     blocking_date = State()
+
+class RescheduleStates(StatesGroup):
+    choosing_date = State()
+    choosing_time = State()
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -304,6 +310,21 @@ def schedule_reminders(booking_id: str, b: dict):
         except Exception as e:
             logging.error(f"Care PDF error: {e}")
 
+    async def send_review_request(uid, name):
+        kb = InlineKeyboardBuilder()
+        kb.button(text="⭐ Отзыв на Яндекс.Картах", url=YANDEX_REVIEWS)
+        kb.button(text="⭐ Отзыв ВКонтакте", url=VK_REVIEWS)
+        kb.button(text="👍 Всё отлично, спасибо!", callback_data="review_skip")
+        kb.adjust(1)
+        try:
+            await bot.send_message(uid,
+                f"✨ Надеемся, процедура прошла отлично!\n\n"
+                f"Если вам всё понравилось — будем очень благодарны за отзыв. "
+                f"Это занимает 1 минуту и очень помогает нам 🙏",
+                reply_markup=kb.as_markup())
+        except Exception as e:
+            logging.error(e)
+
     async def notify_admin_no_confirm(name, service, date_display, time_str):
         try:
             await bot.send_message(ADMIN_ID,
@@ -340,6 +361,13 @@ def schedule_reminders(booking_id: str, b: dict):
         scheduler.add_job(notify_admin_no_confirm, "date", run_date=r23,
             args=[b["name"], b["service"], b.get("date_display",""), b["time"]],
             id=f"r23_{booking_id}", replace_existing=True)
+
+    # Через 24 часа после визита — просьба оставить отзыв
+    review_time = visit_dt + timedelta(hours=24)
+    if review_time > now:
+        scheduler.add_job(send_review_request, "date", run_date=review_time,
+            args=[b["user_id"], b["name"]],
+            id=f"review_{booking_id}", replace_existing=True)
 
 # ── КЛАВИАТУРЫ ────────────────────────────────────────────────────────────────
 def main_kb():
@@ -397,6 +425,10 @@ async def how_to_get(message: Message):
 
 
 # ── ПОДТВЕРЖДЕНИЕ ЗАПИСИ ──────────────────────────────────────────────────────
+@dp.callback_query(F.data == "review_skip")
+async def review_skip(callback: CallbackQuery):
+    await callback.message.edit_text("Спасибо! Всегда рады вас видеть 😊")
+
 @dp.callback_query(F.data.startswith("confirm_yes_"))
 async def confirm_yes(callback: CallbackQuery):
     booking_id = callback.data[12:]
@@ -451,6 +483,7 @@ async def my_bookings(message: Message):
     for i, b in enumerate(ub):
         d = datetime.strptime(b["date"], "%Y-%m-%d").date()
         text += f"{i+1}. {b['service']}\n   📅 {fmt_date(d)} в {b['time']} — {fmt_price(b['price'])}\n\n"
+        kb.button(text=f"🔄 Перенести №{i+1}", callback_data=f"reschedule_{b['id']}")
         kb.button(text=f"❌ Отменить №{i+1}", callback_data=f"cancel_{b['id']}")
     kb.adjust(1)
     await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
@@ -642,6 +675,106 @@ async def finalize(message: Message, state: FSMContext):
             f"💆 {b['service']}{thick}\n"
             f"📅 {b['date_display']} в {b['time']}\n"
             f"💰 {fmt_price(b['price'])}",
+            parse_mode="HTML")
+    except Exception as e:
+        logging.error(e)
+    await state.clear()
+
+
+# ── ПЕРЕНОС ЗАПИСИ ────────────────────────────────────────────────────────────
+@dp.callback_query(F.data.startswith("reschedule_"))
+async def reschedule_start(callback: CallbackQuery, state: FSMContext):
+    booking_id = callback.data[11:]
+    b = await db_get_booking_by_id(booking_id)
+    if not b:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+    await state.update_data(
+        reschedule_id=booking_id,
+        service_name=b["service"],
+        price=b["price"],
+        hours=2,
+        thickness=b.get("thickness","")
+    )
+    dates = await get_dates(offset=0)
+    kb = InlineKeyboardBuilder()
+    for d in dates:
+        kb.button(text=fmt_date(d), callback_data=f"redate_{d}")
+    kb.button(text="📅 Позднее →", callback_data="redate_next")
+    kb.adjust(2)
+    await state.set_state(RescheduleStates.choosing_date)
+    await callback.message.edit_text(
+        f"🔄 <b>Перенос записи</b>\n{b['service']}\n\nВыберите новую дату:",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data == "redate_next")
+async def redate_next(callback: CallbackQuery, state: FSMContext):
+    dates = await get_dates(offset=14)
+    kb = InlineKeyboardBuilder()
+    for d in dates:
+        kb.button(text=fmt_date(d), callback_data=f"redate_{d}")
+    kb.adjust(2)
+    await callback.message.edit_text("📅 <b>Следующие 2 недели:</b>",
+                                     reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("redate_") & ~F.data.endswith("next"))
+async def reschedule_date(callback: CallbackQuery, state: FSMContext):
+    date_str = callback.data[7:]
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    await state.update_data(new_date=date_str, new_date_display=fmt_date(d))
+    slots = get_available_slots(d)
+    if not slots:
+        await callback.answer("На этот день нет свободного времени.", show_alert=True)
+        return
+    kb = InlineKeyboardBuilder()
+    for s in slots:
+        kb.button(text=s, callback_data=f"retime_{s}")
+    kb.adjust(3)
+    await state.set_state(RescheduleStates.choosing_time)
+    await callback.message.edit_text(f"⏰ <b>Выберите новое время на {fmt_date(d)}:</b>",
+                                     reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("retime_"))
+async def reschedule_time(callback: CallbackQuery, state: FSMContext):
+    new_time = callback.data[7:]
+    data = await state.get_data()
+    booking_id = data["reschedule_id"]
+
+    # Отменяем старую запись
+    old = await db_cancel_booking(booking_id)
+    if not old:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+
+    # Создаём новую
+    new_id = f"{data['new_date']}_{new_time}_{callback.from_user.id}"
+    new_b = {
+        "user_id":      callback.from_user.id,
+        "service":      old["service"],
+        "date":         data["new_date"],
+        "time":         new_time,
+        "price":        old["price"],
+        "name":         old["name"],
+        "contact":      old["contact"],
+        "thickness":    old.get("thickness",""),
+        "date_display": data["new_date_display"],
+    }
+    await db_save_booking(new_id, new_b)
+    schedule_reminders(new_id, new_b)
+
+    await callback.message.edit_text(
+        f"✅ <b>Запись перенесена!</b>\n\n"
+        f"💆 {old['service']}\n"
+        f"📅 {data['new_date_display']} в {new_time}\n"
+        f"💰 {fmt_price(old['price'])}\n\n{ADDRESS}",
+        parse_mode="HTML")
+    try:
+        await bot.send_message(ADMIN_ID,
+            f"🔄 <b>Перенос записи!</b>\n\n"
+            f"👤 {old['name']} · {old['contact']}\n"
+            f"💆 {old['service']}\n"
+            f"Было: {old.get('date_display','')} в {old['time']}\n"
+            f"Стало: {data['new_date_display']} в {new_time}",
             parse_mode="HTML")
     except Exception as e:
         logging.error(e)
