@@ -24,6 +24,8 @@ GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON", "")
 SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID", "")
 CALENDAR_ID       = os.getenv("CALENDAR_ID", "")   # ID вашего Google Calendar
 DATABASE_URL      = os.getenv("DATABASE_URL", "")
+PORTFOLIO_CHANNEL = -1004425193962  # ID канала с портфолио
+CARE_PDF_PATH     = "/app/care.pdf"  # путь к PDF инструкции по уходу
 
 ADDRESS     = "📍 Крыленко 14 стр3, домофон 116, этаж 8"
 ADDRESS_LAT = 59.895772
@@ -155,6 +157,12 @@ async def db_unblock_date(d: str):
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM blocked_dates WHERE date=$1", d)
 
+async def db_get_booking_by_id(booking_id: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM bookings WHERE id=$1 AND status='active'", booking_id)
+    return dict(row) if row else None
+
 async def db_get_blocked_dates():
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -267,19 +275,73 @@ scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 def schedule_reminders(booking_id: str, b: dict):
     visit_dt = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M")
     now = datetime.now()
+
     async def remind(uid, text):
         try: await bot.send_message(uid, text, parse_mode="HTML")
         except Exception as e: logging.error(e)
+
+    async def send_confirmation(uid, bk_id, name, service, date_display, time_str):
+        kb = InlineKeyboardBuilder()
+        kb.button(text="✅ Подтверждаю запись", callback_data=f"confirm_yes_{bk_id}")
+        kb.button(text="❌ Отменить запись",    callback_data=f"confirm_no_{bk_id}")
+        kb.adjust(1)
+        try:
+            await bot.send_message(uid,
+                f"👋 <b>Напоминаем о вашей записи завтра!</b>\n\n"
+                f"💆 {service}\n📅 {date_display} в {time_str}\n\n"
+                f"Пожалуйста, подтвердите визит:",
+                reply_markup=kb.as_markup(), parse_mode="HTML")
+        except Exception as e:
+            logging.error(e)
+
+    async def send_care_instructions(uid):
+        import os
+        try:
+            if os.path.exists(CARE_PDF_PATH):
+                from aiogram.types import FSInputFile
+                await bot.send_document(uid, FSInputFile(CARE_PDF_PATH),
+                    caption="📋 <b>Рекомендации по уходу после процедуры</b>\n\nСохраните этот документ!", parse_mode="HTML")
+            else:
+                logging.warning("care.pdf не найден")
+        except Exception as e:
+            logging.error(f"Care PDF error: {e}")
+
+    async def notify_admin_no_confirm(name, service, date_display, time_str):
+        try:
+            await bot.send_message(ADMIN_ID,
+                f"⚠️ <b>Клиент не подтвердил запись!</b>\n\n"
+                f"👤 {name}\n💆 {service}\n📅 {date_display} в {time_str}\n\n"
+                f"Рекомендуем связаться с клиентом.", parse_mode="HTML")
+        except Exception as e:
+            logging.error(e)
+
+    # За 24 часа — запрос подтверждения
     r24 = visit_dt - timedelta(hours=24)
-    r2  = visit_dt - timedelta(hours=2)
     if r24 > now:
-        scheduler.add_job(remind, "date", run_date=r24,
-            args=[b["user_id"], f"⏰ <b>Напоминание!</b>\nЗавтра:\n{b['service']}\n{b.get('date_display','')} в {b['time']}\n\n{ADDRESS}"],
+        scheduler.add_job(send_confirmation, "date", run_date=r24,
+            args=[b["user_id"], booking_id, b["name"], b["service"], b.get("date_display",""), b["time"]],
             id=f"r24_{booking_id}", replace_existing=True)
+
+    # За 2 часа — напоминание
+    r2 = visit_dt - timedelta(hours=2)
     if r2 > now:
         scheduler.add_job(remind, "date", run_date=r2,
             args=[b["user_id"], f"⏰ <b>Через 2 часа</b> ваша процедура!\n{b['service']}\nв {b['time']}\n\n{ADDRESS}"],
             id=f"r2_{booking_id}", replace_existing=True)
+
+    # Через 2 часа после СТАРТА — инструкция по уходу
+    care_time = visit_dt + timedelta(hours=2)
+    if care_time > now:
+        scheduler.add_job(send_care_instructions, "date", run_date=care_time,
+            args=[b["user_id"]],
+            id=f"care_{booking_id}", replace_existing=True)
+
+    # Если не подтвердил — уведомить админа (за 23 часа, т.е. через 1 час после запроса)
+    r23 = visit_dt - timedelta(hours=23)
+    if r23 > now:
+        scheduler.add_job(notify_admin_no_confirm, "date", run_date=r23,
+            args=[b["name"], b["service"], b.get("date_display",""), b["time"]],
+            id=f"r23_{booking_id}", replace_existing=True)
 
 # ── КЛАВИАТУРЫ ────────────────────────────────────────────────────────────────
 def main_kb():
@@ -288,6 +350,7 @@ def main_kb():
     kb.button(text="💰 Прайс")
     kb.button(text="📋 Мои записи")
     kb.button(text="🗺 Как пройти")
+    kb.button(text="📸 Портфолио")
     kb.adjust(2)
     return kb.as_markup(resize_keyboard=True)
 
@@ -297,6 +360,7 @@ def admin_kb():
     kb.button(text="💰 Прайс")
     kb.button(text="📋 Мои записи")
     kb.button(text="🗺 Как пройти")
+    kb.button(text="📸 Портфолио")
     kb.button(text="👑 Админ-панель")
     kb.adjust(2)
     return kb.as_markup(resize_keyboard=True)
@@ -304,7 +368,7 @@ def admin_kb():
 def get_kb(user_id: int):
     return admin_kb() if user_id == ADMIN_ID else main_kb()
 
-MAIN_TEXT = "✨ <b>Keratin & Botox Studio</b>\n\nПривет! Я помогу вам записаться на процедуру.\nВыберите действие:"
+MAIN_TEXT = "✨ <b>Кератин&Ботокс</b>\n\nПривет! Я помогу вам записаться на процедуру.\nВыберите действие:"
 
 # ── СТАРТ ─────────────────────────────────────────────────────────────────────
 @dp.message(CommandStart())
@@ -316,26 +380,9 @@ async def cmd_start(message: Message, state: FSMContext):
 @dp.message(F.text == "💰 Прайс")
 @dp.message(Command("price"))
 async def show_price(message: Message):
-    await message.answer(
-        "💰 <b>Прайс-лист</b>\n\n"
-        "<b>Кератиновое выпрямление:</b>\n"
-        "30 см — 4 000 ₽ · 35 см — 4 500 ₽\n"
-        "40 см — 5 000 ₽ · 45 см — 5 500 ₽\n"
-        "50 см — 6 000 ₽ · 55 см — 6 500 ₽\n"
-        "60 см — 7 000 ₽ · 65 см — 8 000 ₽\n"
-        "70 см — 9 000 ₽\n\n"
-        "<b>Доплаты за густоту:</b>\n"
-        "до 5 см — без доплат · 5–8 см — +500 ₽\n"
-        "9–13 см — +1 000 ₽ · более 13 см — +2 000 ₽\n"
-        "нарощенные — +1 000 ₽\n\n"
-        "<b>Другие услуги:</b>\n"
-        "Холодное восстановление — 4 500 ₽\n"
-        "Пилинг кожи головы — 1 000 ₽\n"
-        "Стрижка кончиков после процедуры — бесплатно\n"
-        "Стрижка кончиков без процедуры — 800 ₽\n"
-        "Кератин чёлки — 2 000 ₽\n"
-        "Прикорневая зона — 4 000 ₽",
-        reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
+    from aiogram.types import FSInputFile
+    await message.answer_photo(FSInputFile("/app/price1.jpg"))
+    await message.answer_photo(FSInputFile("/app/price2.jpg"), reply_markup=get_kb(message.from_user.id))
 
 # ── КАК ПРОЙТИ ────────────────────────────────────────────────────────────────
 @dp.message(F.text == "🗺 Как пройти")
@@ -347,9 +394,66 @@ async def how_to_get(message: Message):
         f"<b>Как нас найти:</b>\n\n{ADDRESS}\n\n"
         f"🚇 Ближайшее метро: Улица Дыбенко\n"
         f"🚶 От метро ~10 минут пешком\n\n"
-        f"Войдите во двор, домофон 116, лифт на 8 этаж.",
+        f"Можно войти с обеих сторон дома, домофон 116, лифт на 8 этаж.",
         reply_markup=kb.as_markup(), parse_mode="HTML")
     # await message.answer_photo(photo=ENTRY_PHOTO, caption="Вход в подъезд")
+
+
+# ── ПОРТФОЛИО ─────────────────────────────────────────────────────────────────
+@dp.message(F.text == "📸 Портфолио")
+async def show_portfolio(message: Message):
+    try:
+        count = 0
+        async for msg in bot.get_chat_history(PORTFOLIO_CHANNEL, limit=10):
+            if msg.photo:
+                await bot.forward_message(message.chat.id, PORTFOLIO_CHANNEL, msg.message_id)
+                count += 1
+        if count == 0:
+            await message.answer("📸 Портфолио пока пустое — скоро добавим работы!")
+    except Exception as e:
+        logging.error(f"Portfolio error: {e}")
+        await message.answer("📸 Портфолио временно недоступно.")
+
+# ── ПОДТВЕРЖДЕНИЕ ЗАПИСИ ──────────────────────────────────────────────────────
+@dp.callback_query(F.data.startswith("confirm_yes_"))
+async def confirm_yes(callback: CallbackQuery):
+    booking_id = callback.data[12:]
+    b = await db_get_booking_by_id(booking_id)
+    if b:
+        # Отменяем уведомление "не подтвердил"
+        try: scheduler.remove_job(f"r23_{booking_id}")
+        except: pass
+        await callback.message.edit_text(
+            f"✅ <b>Отлично, ждём вас!</b>\n\n"
+            f"💆 {b['service']}\n📅 {b.get('date_display','')} в {b['time']}\n\n{ADDRESS}",
+            parse_mode="HTML")
+        try:
+            await bot.send_message(ADMIN_ID,
+                f"✅ <b>{b['name']} подтвердил запись!</b>\n"
+                f"📅 {b.get('date_display','')} в {b['time']}", parse_mode="HTML")
+        except Exception as e: logging.error(e)
+    else:
+        await callback.answer("Запись не найдена.", show_alert=True)
+
+@dp.callback_query(F.data.startswith("confirm_no_"))
+async def confirm_no(callback: CallbackQuery):
+    booking_id = callback.data[11:]
+    b = await db_cancel_booking(booking_id)
+    if b:
+        try: scheduler.remove_job(f"r2_{booking_id}")
+        except: pass
+        try: scheduler.remove_job(f"r23_{booking_id}")
+        except: pass
+        await callback.message.edit_text(
+            "❌ Ваша запись отменена. Будем рады видеть вас в другой раз!\n\n"
+            "Для новой записи нажмите «💆 Записаться»")
+        try:
+            await bot.send_message(ADMIN_ID,
+                f"❌ <b>{b['name']} отменил запись!</b>\n"
+                f"💆 {b['service']}\n📅 {b.get('date_display','')} в {b['time']}", parse_mode="HTML")
+        except Exception as e: logging.error(e)
+    else:
+        await callback.answer("Запись не найдена.", show_alert=True)
 
 # ── МОИ ЗАПИСИ ────────────────────────────────────────────────────────────────
 @dp.message(F.text == "📋 Мои записи")
