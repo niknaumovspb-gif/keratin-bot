@@ -51,7 +51,6 @@ THICKNESS_PRICES = {
 OTHER_SERVICES = {
     "cold_restore":  {"name": "Холодное восстановление",           "price": 4500, "hours": 2},
     "scalp_peeling": {"name": "Пилинг кожи головы",                "price": 1000, "hours": 1},
-    "trim_after":    {"name": "Стрижка кончиков после процедуры",   "price": 0,    "hours": 1},
     "trim_only":     {"name": "Стрижка кончиков без процедуры",     "price": 800,  "hours": 1},
     "keratin_bangs": {"name": "Кератин чёлки",                     "price": 2000, "hours": 1},
     "root_zone":     {"name": "Прикорневая зона*",                  "price": 4000, "hours": 2},
@@ -403,11 +402,24 @@ async def how_to_get(message: Message):
 @dp.message(F.text == "📸 Портфолио")
 async def show_portfolio(message: Message):
     try:
+        await message.answer("📸 <b>Портфолио работ</b>\n\nЗагружаю...", parse_mode="HTML")
         count = 0
-        async for msg in bot.get_chat_history(PORTFOLIO_CHANNEL, limit=10):
-            if msg.photo:
-                await bot.forward_message(message.chat.id, PORTFOLIO_CHANNEL, msg.message_id)
+        # Перебираем последние 30 сообщений канала по ID (ищем фото)
+        # Получаем последнее сообщение чтобы узнать максимальный ID
+        chat = await bot.get_chat(PORTFOLIO_CHANNEL)
+        # Пробуем переслать последние сообщения
+        for msg_id in range(1, 50):
+            try:
+                await bot.copy_message(
+                    chat_id=message.chat.id,
+                    from_chat_id=PORTFOLIO_CHANNEL,
+                    message_id=msg_id
+                )
                 count += 1
+                if count >= 10:
+                    break
+            except Exception:
+                continue
         if count == 0:
             await message.answer("📸 Портфолио пока пустое — скоро добавим работы!")
     except Exception as e:
@@ -503,7 +515,6 @@ async def show_services(message: Message, state: FSMContext):
     kb.button(text="💎 Кератиновое выпрямление",            callback_data="svc_keratin")
     kb.button(text="❄️ Холодное восстановление",            callback_data="svc_cold_restore")
     kb.button(text="🌿 Пилинг кожи головы",                 callback_data="svc_scalp_peeling")
-    kb.button(text="✂️ Стрижка кончиков (после процедуры)", callback_data="svc_trim_after")
     kb.button(text="✂️ Стрижка кончиков (без процедуры)",   callback_data="svc_trim_only")
     kb.button(text="💫 Кератин чёлки",                      callback_data="svc_keratin_bangs")
     kb.button(text="🔄 Прикорневая зона",                   callback_data="svc_root_zone")
@@ -536,13 +547,24 @@ async def choose_thickness(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     for name, extra in THICKNESS_PRICES.items():
         kb.button(text=name if extra == 0 else f"{name} (+{extra} ₽)", callback_data=f"thick_{name}")
+    kb.button(text="🤷 Не знаю", callback_data="thick_unknown")
     kb.adjust(1)
     await state.set_state(BookingStates.choosing_thickness)
     await callback.message.edit_text(
         "💇 <b>Густота волос:</b>\n\n<i>Сечение хвоста у основания</i>",
         reply_markup=kb.as_markup(), parse_mode="HTML")
 
-@dp.callback_query(F.data.startswith("thick_"))
+@dp.callback_query(F.data == "thick_unknown")
+async def thickness_unknown(callback: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    length = data["length"]
+    price  = KERATIN_PRICES[length]["price"]
+    await state.update_data(thickness="уточняется у мастера", price=price,
+                            hours=KERATIN_PRICES[length]["hours"],
+                            service_name=f"Кератиновое выпрямление {length} см")
+    await show_dates(callback, state)
+
+@dp.callback_query(F.data.startswith("thick_") & ~F.data.endswith("unknown"))
 async def after_thickness(callback: CallbackQuery, state: FSMContext):
     thickness = callback.data[6:]
     data = await state.get_data()
