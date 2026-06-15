@@ -67,7 +67,7 @@ class BookingStates(StatesGroup):
     entering_contact   = State()
 
 class AdminStates(StatesGroup):
-    blocking_date = State()
+    pass  # резерв
 
 class RescheduleStates(StatesGroup):
     choosing_date = State()
@@ -386,6 +386,16 @@ def fmt_price(p: int):
 # ── НАПОМИНАНИЯ ───────────────────────────────────────────────────────────────
 scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
 
+
+def _cancel_reminder_jobs(booking_id: str):
+    """Удаляет все напоминания для записи."""
+    for job_id in [f"r24_{booking_id}", f"r2_{booking_id}",
+                   f"care_{booking_id}", f"r23_{booking_id}", f"review_{booking_id}"]:
+        try:
+            scheduler.remove_job(job_id)
+        except Exception:
+            pass
+
 def schedule_reminders(booking_id: str, b: dict):
     visit_dt = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M")
     now = datetime.now()
@@ -586,10 +596,7 @@ async def confirm_no(callback: CallbackQuery):
     booking_id = callback.data[11:]
     b = await db_cancel_booking(booking_id)
     if b:
-        try: scheduler.remove_job(f"r2_{booking_id}")
-        except: pass
-        try: scheduler.remove_job(f"r23_{booking_id}")
-        except: pass
+        _cancel_reminder_jobs(booking_id)
         await callback.message.edit_text(
             "❌ Ваша запись отменена. Будем рады видеть вас в другой раз!\n\n"
             "Для новой записи нажмите «💆 Записаться»")
@@ -627,6 +634,7 @@ async def cancel_booking(callback: CallbackQuery):
     if b:
         d = datetime.strptime(b["date"], "%Y-%m-%d").date()
         gcal_delete_event(b)
+        _cancel_reminder_jobs(booking_id)
         await callback.message.edit_text(
             f"✅ Запись отменена:\n{b['service']}\n{fmt_date(d)} в {b['time']}", parse_mode="HTML")
         try:
@@ -931,6 +939,9 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Запись не найдена.", show_alert=True)
         return
 
+    # Удаляем старые напоминания
+    _cancel_reminder_jobs(booking_id)
+
     # Создаём новую
     new_id = f"{data['new_date']}_{new_time}_{callback.from_user.id}"
     new_b = {
@@ -965,6 +976,35 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
         logging.error(e)
     await state.clear()
 
+
+@dp.callback_query(F.data.startswith("reschedule_admin_"))
+async def admin_reschedule_start(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    booking_id = callback.data[17:]
+    b = await db_get_booking_by_id(booking_id)
+    if not b:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+    await state.update_data(
+        reschedule_id=booking_id,
+        service_name=b["service"],
+        price=b["price"],
+        hours=get_slot_duration(),
+        thickness=b.get("thickness",""),
+        is_admin_reschedule=True
+    )
+    dates = await get_dates(offset=0)
+    kb = InlineKeyboardBuilder()
+    for d in dates:
+        kb.button(text=fmt_date(d), callback_data=f"redate_{d}")
+    kb.button(text="📅 Позднее →", callback_data="redate_next")
+    kb.adjust(2)
+    await state.set_state(RescheduleStates.choosing_date)
+    await callback.message.edit_text(
+        f"🔄 <b>Перенос записи (админ)</b>\n{b['service']}\n"
+        f"👤 {b['name']}\n\nВыберите новую дату:",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
 # ── АДМИН-ПАНЕЛЬ ──────────────────────────────────────────────────────────────
 def is_admin(message: Message):
     return message.from_user.id == ADMIN_ID
@@ -974,9 +1014,9 @@ async def admin_panel(message: Message):
     if not is_admin(message):
         return
     kb = InlineKeyboardBuilder()
-    kb.button(text="📋 Все записи",       callback_data="admin_all_bookings")
-    kb.button(text="🚫 Заблокировать день", callback_data="admin_block")
-    kb.button(text="✅ Разблокировать день", callback_data="admin_unblock")
+    kb.button(text="📋 Все записи",         callback_data="admin_all_bookings")
+    kb.button(text="🚫 Заблокировать день",  callback_data="admin_block_pick")
+    kb.button(text="✅ Разблокировать день",  callback_data="admin_unblock_pick")
     kb.button(text="📅 Заблокированные дни", callback_data="admin_blocked_list")
     kb.adjust(1)
     await message.answer("👑 <b>Админ-панель</b>", reply_markup=kb.as_markup(), parse_mode="HTML")
@@ -997,6 +1037,7 @@ async def admin_all_bookings(callback: CallbackQuery):
                  f"   {b['service']}{thick}\n"
                  f"   👤 {b['name']} · {b['contact']}\n"
                  f"   💰 {fmt_price(b['price'])}\n\n")
+        kb.button(text=f"🔄 Перенести №{i+1}", callback_data=f"reschedule_admin_{b['id']}")
         kb.button(text=f"❌ Отменить №{i+1}", callback_data=f"cancel_admin_{b['id']}")
     kb.adjust(1)
     # Telegram ограничивает длину — если записей много, обрезаем
@@ -1012,6 +1053,7 @@ async def admin_cancel_booking(callback: CallbackQuery):
     if b:
         d = datetime.strptime(b["date"], "%Y-%m-%d").date()
         gcal_delete_event(b)
+        _cancel_reminder_jobs(booking_id)
         await callback.message.edit_text(
             f"✅ Запись отменена:\n{b['service']}\n{fmt_date(d)} в {b['time']}")
         try:
@@ -1025,48 +1067,100 @@ async def admin_cancel_booking(callback: CallbackQuery):
     else:
         await callback.answer("Запись не найдена.", show_alert=True)
 
-@dp.callback_query(F.data == "admin_block")
-async def admin_block_start(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "admin_block_pick")
+async def admin_block_pick(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    await state.set_state(AdminStates.blocking_date)
     await state.update_data(block_action="block")
-    await callback.message.edit_text(
-        "🚫 Введите дату для блокировки в формате <b>ДД.ММ.ГГГГ</b>\n"
-        "Например: <code>25.06.2025</code>\n\n"
-        "Можно добавить причину через пробел:\n"
-        "<code>25.06.2025 Отпуск</code>",
-        parse_mode="HTML")
+    await _show_admin_date_picker(callback, state, "block")
 
-@dp.callback_query(F.data == "admin_unblock")
-async def admin_unblock_start(callback: CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "admin_unblock_pick")
+async def admin_unblock_pick(callback: CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID: return
-    await state.set_state(AdminStates.blocking_date)
-    await state.update_data(block_action="unblock")
-    await callback.message.edit_text(
-        "✅ Введите дату для разблокировки в формате <b>ДД.ММ.ГГГГ</b>\n"
-        "Например: <code>25.06.2025</code>",
-        parse_mode="HTML")
-
-@dp.message(AdminStates.blocking_date)
-async def admin_process_date(message: Message, state: FSMContext):
-    if not is_admin(message): return
-    data   = await state.get_data()
-    action = data.get("block_action")
-    parts  = message.text.strip().split(None, 1)
-    reason = parts[1] if len(parts) > 1 else ""
-    try:
-        d = datetime.strptime(parts[0], "%d.%m.%Y").date()
-    except ValueError:
-        await message.answer("❌ Неверный формат. Введите дату как ДД.ММ.ГГГГ")
+    # Показываем только уже заблокированные дни
+    blocked = await db_get_blocked_dates()
+    if not blocked:
+        await callback.answer("Нет заблокированных дней.", show_alert=True)
         return
-    if action == "block":
-        await db_block_date(str(d), reason)
-        await message.answer(f"🚫 День {fmt_date(d)} заблокирован{' — ' + reason if reason else ''}.",
-                             reply_markup=admin_kb())
-    else:
-        await db_unblock_date(str(d))
-        await message.answer(f"✅ День {fmt_date(d)} разблокирован.", reply_markup=admin_kb())
-    await state.clear()
+    kb = InlineKeyboardBuilder()
+    for b in blocked:
+        d = datetime.strptime(b["date"], "%Y-%m-%d").date()
+        label = fmt_date(d)
+        if b.get("reason"):
+            label += f" ({b['reason']})"
+        kb.button(text=label, callback_data=f"admin_do_unblock_{b['date']}")
+    kb.button(text="◀️ Назад", callback_data="admin_panel")
+    kb.adjust(1)
+    await callback.message.edit_text(
+        "✅ <b>Выберите день для разблокировки:</b>",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
+async def _show_admin_date_picker(callback: CallbackQuery, state: FSMContext, action: str, offset: int = 0):
+    today = datetime.now().date()
+    dates = []
+    i = 0
+    while len(dates) < 14:
+        i += 1
+        d = today + timedelta(days=i)
+        dates.append(d)
+        if i > 60:
+            break
+    kb = InlineKeyboardBuilder()
+    start = offset
+    end = min(offset + 14, len(dates))
+    for d in dates[start:end]:
+        kb.button(text=fmt_date(d), callback_data=f"admin_do_block_{d}")
+    if end < len(dates):
+        kb.button(text="📅 Ещё →", callback_data=f"admin_block_more_{offset+14}")
+    kb.button(text="◀️ Назад", callback_data="admin_panel")
+    kb.adjust(2)
+    await callback.message.edit_text(
+        "🚫 <b>Выберите день для блокировки:</b>",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("admin_block_more_"))
+async def admin_block_more(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    offset = int(callback.data.split("_")[-1])
+    await _show_admin_date_picker(callback, state, "block", offset)
+
+@dp.callback_query(F.data.startswith("admin_do_block_"))
+async def admin_do_block(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    date_str = callback.data[15:]
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    await db_block_date(date_str, "")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="◀️ В админ-панель", callback_data="admin_panel")
+    kb.adjust(1)
+    await callback.message.edit_text(
+        f"🚫 День <b>{fmt_date(d)}</b> заблокирован.
+Клиенты не смогут записаться на этот день.",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data.startswith("admin_do_unblock_"))
+async def admin_do_unblock(callback: CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID: return
+    date_str = callback.data[17:]
+    d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    await db_unblock_date(date_str)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="◀️ В админ-панель", callback_data="admin_panel")
+    kb.adjust(1)
+    await callback.message.edit_text(
+        f"✅ День <b>{fmt_date(d)}</b> разблокирован.",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data == "admin_panel")
+async def admin_panel_cb(callback: CallbackQuery):
+    if callback.from_user.id != ADMIN_ID: return
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Все записи",         callback_data="admin_all_bookings")
+    kb.button(text="🚫 Заблокировать день",  callback_data="admin_block_pick")
+    kb.button(text="✅ Разблокировать день",  callback_data="admin_unblock_pick")
+    kb.button(text="📅 Заблокированные дни", callback_data="admin_blocked_list")
+    kb.adjust(1)
+    await callback.message.edit_text("👑 <b>Админ-панель</b>",
+                                     reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_blocked_list")
 async def admin_blocked_list(callback: CallbackQuery):
