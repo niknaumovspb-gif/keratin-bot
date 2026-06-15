@@ -139,6 +139,16 @@ async def db_save_booking(booking_id: str, b: dict):
         """, booking_id, b["user_id"], b["service"], b["date"], b["time"],
              b["price"], b["name"], b["contact"], b.get("thickness",""), b.get("date_display",""))
 
+async def db_update_booking_time(booking_id: str, new_date: str, new_time: str, new_date_display: str):
+    """Обновляет дату и время записи — перенос без удаления."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "UPDATE bookings SET date=$1, time=$2, date_display=$3 WHERE id=$4 AND status='active' RETURNING *",
+            new_date, new_time, new_date_display, booking_id
+        )
+    return dict(row) if row else None
+
 async def db_cancel_booking(booking_id: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -843,7 +853,8 @@ async def finalize(message: Message, state: FSMContext):
         "thickness":    data.get("thickness", ""),
         "date_display": data.get("date_display", ""),
     }
-    booking_id = f"{b['date']}_{b['time']}_{b['user_id']}"
+    import time as _time
+    booking_id = f"{b['date']}_{b['time']}_{b['user_id']}_{int(_time.time())}"
     try:
         await db_save_booking(booking_id, b)
         logging.info(f"Запись сохранена: {booking_id}")
@@ -955,8 +966,8 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     booking_id = data["reschedule_id"]
 
-    # Отменяем старую запись
-    old = await db_cancel_booking(booking_id)
+    # Получаем старую запись
+    old = await db_get_booking_by_id(booking_id)
     if not old:
         await callback.answer("Запись не найдена.", show_alert=True)
         return
@@ -964,42 +975,32 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
     # Удаляем старые напоминания
     _cancel_reminder_jobs(booking_id)
 
-    # Создаём новую
-    new_id = f"{data['new_date']}_{new_time}_{callback.from_user.id}"
-    new_b = {
-        "user_id":      callback.from_user.id,
-        "service":      old["service"],
-        "date":         data["new_date"],
-        "time":         new_time,
-        "price":        old["price"] if old["price"] is not None else -1,
-        "name":         old["name"],
-        "contact":      old["contact"],
-        "thickness":    old.get("thickness",""),
-        "date_display": data["new_date_display"],
-    }
-    try:
-        await db_save_booking(new_id, new_b)
-        logging.info(f"Перенос сохранён: {new_id}")
-    except Exception as e:
-        logging.error(f"ОШИБКА сохранения переноса: {e}")
-        await callback.answer("Ошибка сохранения. Попробуйте ещё раз.", show_alert=True)
+    # Обновляем дату/время — ID и user_id не меняются!
+    updated = await db_update_booking_time(booking_id, data["new_date"], new_time, data["new_date_display"])
+    if not updated:
+        await callback.answer("Ошибка обновления записи.", show_alert=True)
         return
-    schedule_reminders(new_id, new_b)
 
+    # Создаём новые напоминания на новое время
+    updated["date_display"] = data["new_date_display"]
+    schedule_reminders(booking_id, updated)
+
+    old_date_display = old.get("date_display", "")
+    old_time = old["time"]
     await callback.message.edit_text(
         f"✅ <b>Запись перенесена!</b>\n\n"
-        f"💆 {old['service']}\n"
+        f"💆 {updated['service']}\n"
         f"📅 {data['new_date_display']} в {new_time}\n"
-        f"💰 {fmt_price(old['price'])}\n\n{get_address()}",
+        f"💰 {fmt_price(updated['price'])}\n\n{get_address()}",
         parse_mode="HTML")
     notify = get_notify_id()
     if notify:
         try:
             await bot.send_message(notify,
                 f"🔄 <b>Перенос записи!</b>\n\n"
-                f"👤 {old['name']} · {old['contact']}\n"
-                f"💆 {old['service']}\n"
-                f"Было: {old.get('date_display','')} в {old['time']}\n"
+                f"👤 {updated['name']} · {updated['contact']}\n"
+                f"💆 {updated['service']}\n"
+                f"Было: {old_date_display} в {old_time}\n"
                 f"Стало: {data['new_date_display']} в {new_time}",
                 parse_mode="HTML")
         except Exception as e:
