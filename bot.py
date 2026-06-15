@@ -778,8 +778,7 @@ async def choose_time(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     for s in slots:
         kb.button(text=s, callback_data=f"time_{s}")
-    kb.button(text="◀️ Другое время", callback_data=f"date_{data['date']}")
-    kb.button(text="◀️ К услугам", callback_data="book")
+    kb.button(text="◀️ Назад", callback_data=f"date_{data['date']}")
     kb.adjust(3)
     await state.set_state(BookingStates.choosing_time)
     await callback.message.edit_text(
