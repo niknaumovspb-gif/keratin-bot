@@ -79,7 +79,8 @@ def load_config():
                     "name":         r[1].strip(),
                     "price":        int(r[2]) if r[2].strip().isdigit() else 0,
                     "type":         r[3].strip(),  # simple / complex
-                    "price_prefix": r[4].strip() if len(r) >= 5 else "",  # "от" или пусто
+                    "price_prefix":    r[4].strip() if len(r) >= 5 else "",  # "от" или пусто
+                    "extension_note":  r[5].strip() if len(r) >= 6 else "",  # "extension_note" или пусто
                 })
         logging.info(f"Services загружено: {len(_services)} услуг")
 
@@ -169,6 +170,10 @@ def get_admin_ids() -> list:
     import os
     admin_id = os.getenv("ADMIN_ID", "0")
     return [int(admin_id)] if admin_id.isdigit() and int(admin_id) > 0 else []
+
+def get_extension_note_ids() -> set:
+    """ID услуг у которых показывается сноска про нарощенные."""
+    return {s["id"] for s in _services if s.get("extension_note")}
 
 def get_notify_id() -> int:
     """ID кому приходят уведомления о новых записях."""
