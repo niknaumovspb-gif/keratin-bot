@@ -268,9 +268,11 @@ async def get_dates(offset=0):
     while len(dates) < 14:
         d = today + timedelta(days=i)
         if d.weekday() in get_schedule() and not await db_is_blocked(d):
-            count += 1
-            if count > offset:
-                dates.append(d)
+            periods = await get_available_periods(d)
+            if periods:
+                count += 1
+                if count > offset:
+                    dates.append(d)
         i += 1
         if i > 120:
             break
