@@ -514,7 +514,6 @@ def main_kb():
     kb.button(text="💰 Прайс")
     kb.button(text="📋 Мои записи")
     kb.button(text="🗺 Как пройти")
-    kb.button(text="📸 Портфолио")
     kb.adjust(2)
     return kb.as_markup(resize_keyboard=True)
 
