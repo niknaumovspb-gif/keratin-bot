@@ -32,7 +32,6 @@ THICKNESS_PRICES_DEFAULT = {
     "5–8 см": 500,
     "9–13 см": 1000,
     "более 13 см": 2000,
-    "нарощенные волосы": 1000,
 }
 
 def get_gspread_client():
