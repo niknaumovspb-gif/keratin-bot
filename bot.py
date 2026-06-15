@@ -840,7 +840,14 @@ async def finalize(message: Message, state: FSMContext):
         "date_display": data.get("date_display", ""),
     }
     booking_id = f"{b['date']}_{b['time']}_{b['user_id']}"
-    await db_save_booking(booking_id, b)
+    try:
+        await db_save_booking(booking_id, b)
+        logging.info(f"Запись сохранена: {booking_id}")
+    except Exception as e:
+        logging.error(f"ОШИБКА сохранения записи: {e}")
+        await message.answer("❌ Произошла ошибка при сохранении. Попробуйте ещё раз.")
+        await state.clear()
+        return
     schedule_reminders(booking_id, b)
     save_to_sheets(b)
     gcal_add_event(b)
