@@ -879,7 +879,7 @@ async def finalize(message: Message, state: FSMContext):
 
 
 # ── ПЕРЕНОС ЗАПИСИ ────────────────────────────────────────────────────────────
-@dp.callback_query(F.data.startswith("reschedule_"))
+@dp.callback_query(F.data.startswith("reschedule_") & ~F.data.startswith("reschedule_admin_"))
 async def reschedule_start(callback: CallbackQuery, state: FSMContext):
     booking_id = callback.data[11:]
     b = await db_get_booking_by_id(booking_id)
@@ -982,16 +982,18 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
         f"📅 {data['new_date_display']} в {new_time}\n"
         f"💰 {fmt_price(old['price'])}\n\n{get_address()}",
         parse_mode="HTML")
-    try:
-        await bot.send_message(ADMIN_ID,
-            f"🔄 <b>Перенос записи!</b>\n\n"
-            f"👤 {old['name']} · {old['contact']}\n"
-            f"💆 {old['service']}\n"
-            f"Было: {old.get('date_display','')} в {old['time']}\n"
-            f"Стало: {data['new_date_display']} в {new_time}",
-            parse_mode="HTML")
-    except Exception as e:
-        logging.error(e)
+    notify = get_notify_id()
+    if notify:
+        try:
+            await bot.send_message(notify,
+                f"🔄 <b>Перенос записи!</b>\n\n"
+                f"👤 {old['name']} · {old['contact']}\n"
+                f"💆 {old['service']}\n"
+                f"Было: {old.get('date_display','')} в {old['time']}\n"
+                f"Стало: {data['new_date_display']} в {new_time}",
+                parse_mode="HTML")
+        except Exception as e:
+            logging.error(e)
     await state.clear()
 
 
