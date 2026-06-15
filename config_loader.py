@@ -158,3 +158,6 @@ def get_address_lat():
 
 def get_address_lon():
     return float(cfg("address_lon", "30.465483"))
+
+# Загружаем конфиг при импорте модуля
+load_config()
