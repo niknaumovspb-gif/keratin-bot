@@ -628,10 +628,14 @@ async def my_bookings(message: Message):
     text = "📋 <b>Ваши записи:</b>\n\n"
     kb   = InlineKeyboardBuilder()
     for i, b in enumerate(ub):
-        d = datetime.strptime(b["date"], "%Y-%m-%d").date()
-        text += f"{i+1}. {b['service']}\n   📅 {fmt_date(d)} в {b['time']} — {fmt_price(b['price'])}\n\n"
-        kb.button(text=f"🔄 Перенести №{i+1}", callback_data=f"reschedule_{b['id']}")
-        kb.button(text=f"❌ Отменить №{i+1}", callback_data=f"cancel_{b['id']}")
+        try:
+            date_val = b["date"]
+            d = date_val if not isinstance(date_val, str) else datetime.strptime(date_val, "%Y-%m-%d").date()
+            text += f"{i+1}. {b['service']}\n   📅 {fmt_date(d)} в {b['time']} — {fmt_price(b['price'])}\n\n"
+            kb.button(text=f"🔄 Перенести №{i+1}", callback_data=f"reschedule_{b['id']}")
+            kb.button(text=f"❌ Отменить №{i+1}", callback_data=f"cancel_{b['id']}")
+        except Exception as e:
+            logging.error(f"my_bookings error: {e}, booking: {b}")
     kb.adjust(1)
     await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
