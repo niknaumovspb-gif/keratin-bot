@@ -743,6 +743,10 @@ async def show_dates(callback: CallbackQuery, state: FSMContext, offset: int = 0
     title = "📅 <b>Выберите дату:</b>" if offset == 0 else "📅 <b>Следующие 2 недели:</b>"
     await callback.message.edit_text(title, reply_markup=kb.as_markup(), parse_mode="HTML")
 
+@dp.callback_query(F.data == "show_dates")
+async def cb_show_dates(callback: CallbackQuery, state: FSMContext):
+    await show_dates(callback, state, offset=0)
+
 @dp.callback_query(F.data == "dates_next")
 async def dates_next(callback: CallbackQuery, state: FSMContext):
     await show_dates(callback, state, offset=14)
@@ -759,7 +763,7 @@ async def choose_period(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     for p, label in periods:
         kb.button(text=label, callback_data=f"period_{p}")
-    kb.button(text="◀️ Назад", callback_data="book")
+    kb.button(text="◀️ Назад", callback_data="show_dates")
     kb.adjust(1)
     await state.set_state(BookingStates.choosing_period)
     await callback.message.edit_text(
