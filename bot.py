@@ -593,6 +593,16 @@ async def cancel_booking(callback: CallbackQuery):
 async def btn_book(message: Message, state: FSMContext):
     await show_services(message, state)
 
+@dp.callback_query(F.data == "book")
+async def cb_book(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(BookingStates.choosing_service)
+    kb = InlineKeyboardBuilder()
+    for svc in get_services():
+        kb.button(text=svc["name"], callback_data=f"svc_{svc['id']}")
+    kb.adjust(1)
+    await callback.message.edit_text("💆 <b>Выберите услугу:</b>",
+                                     reply_markup=kb.as_markup(), parse_mode="HTML")
+
 async def show_services(message: Message, state: FSMContext):
     kb = InlineKeyboardBuilder()
     for svc in get_services():
@@ -607,6 +617,7 @@ async def choose_length(callback: CallbackQuery, state: FSMContext):
     for l in get_keratin_prices():
         kb.button(text=f"{l} см", callback_data=f"len_{l}")
     kb.button(text="🤷 Не знаю свою длину", callback_data="len_unknown")
+    kb.button(text="◀️ Назад", callback_data="book")
     kb.adjust(3)
     await state.set_state(BookingStates.choosing_length)
     await callback.message.edit_text(
@@ -627,6 +638,7 @@ async def choose_thickness(callback: CallbackQuery, state: FSMContext):
     for name, extra in THICKNESS_PRICES.items():
         kb.button(text=name if extra == 0 else f"{name} (+{extra} ₽)", callback_data=f"thick_{name}")
     kb.button(text="🤷 Не знаю", callback_data="thick_unknown")
+    kb.button(text="◀️ Назад", callback_data="svc_keratin")
     kb.adjust(1)
     await state.set_state(BookingStates.choosing_thickness)
     await callback.message.edit_text(
@@ -672,6 +684,7 @@ async def show_dates(callback: CallbackQuery, state: FSMContext, offset: int = 0
         kb.button(text=fmt_date(d), callback_data=f"date_{d}")
     if offset == 0:
         kb.button(text="📅 Позднее →", callback_data="dates_next")
+    kb.button(text="◀️ Назад", callback_data="book")
     kb.adjust(2)
     await state.update_data(dates_offset=offset)
     await state.set_state(BookingStates.choosing_date)
@@ -694,6 +707,7 @@ async def choose_period(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     for p, label in periods:
         kb.button(text=label, callback_data=f"period_{p}")
+    kb.button(text="◀️ Назад", callback_data="book")
     kb.adjust(1)
     await state.set_state(BookingStates.choosing_period)
     await callback.message.edit_text(
@@ -713,6 +727,7 @@ async def choose_time(callback: CallbackQuery, state: FSMContext):
     for s in slots:
         kb.button(text=s, callback_data=f"time_{s}")
     kb.button(text="◀️ Другое время", callback_data=f"date_{data['date']}")
+    kb.button(text="◀️ К услугам", callback_data="book")
     kb.adjust(3)
     await state.set_state(BookingStates.choosing_time)
     await callback.message.edit_text(
