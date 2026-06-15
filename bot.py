@@ -17,7 +17,7 @@ import asyncpg
 from config_loader import (load_config, cfg, get_services, get_schedule,
     get_keratin_prices, get_thickness_prices, get_slot_duration,
     get_slot_step, get_day_end, get_address, get_address_lat, get_address_lon,
-    get_admin_ids, get_notify_id)
+    get_admin_ids, get_notify_id, get_extension_note_ids)
 import os
 import json
 
@@ -819,7 +819,8 @@ async def ask_contact(callback: CallbackQuery, state: FSMContext):
         f"Время: {time_str}\n"
         f"Стоимость: {'от ' if _is_price_approximate(data.get('thickness','')) else ''}{fmt_price(data['price'])}\n"
         f"{'<i>⚠️ Ксения свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(data.get('thickness','')) else ''}\n"
-        f"Как с вами связаться?\n"
+        f"{'<i>ℹ️ При наличии нарощенных волос доплата +1 000 ₽</i>\n' if data.get('service_id','') in get_extension_note_ids() else ''}"
+        f"\nКак с вами связаться?\n"
         f"<i>Напишите номер телефона или @username в Telegram</i>",
         parse_mode="HTML")
 
