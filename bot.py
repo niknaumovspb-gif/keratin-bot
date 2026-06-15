@@ -14,6 +14,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 import asyncpg
+from config_loader import (load_config, cfg, get_services, get_schedule,
+    get_keratin_prices, get_thickness_prices, get_slot_duration,
+    get_slot_step, get_day_end, get_address, get_address_lat, get_address_lon)
 import os
 import json
 
@@ -23,21 +26,17 @@ ADMIN_ID          = int(os.getenv("ADMIN_ID", "0"))
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON", "")
 SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID", "")
 CALENDAR_ID       = os.getenv("CALENDAR_ID", "")   # ID вашего Google Calendar
-DATABASE_URL      = os.getenv("DATABASE_URL", "")
+DATABASE_URL           = os.getenv("DATABASE_URL", "")
+CONFIG_SPREADSHEET_ID  = os.getenv("CONFIG_SPREADSHEET_ID", "1e0zEfg_5el7qlxk1RwHOJmKMzi5V2gUWvMpKTYtberw")
 CARE_PDF_PATH     = "/app/care.pdf"  # путь к PDF инструкции по уходу
 YANDEX_REVIEWS    = "https://yandex.ru/maps/org/keratin_botoks/142698359718/reviews/?l=carparks&ll=30.465482%2C59.895773&source=serp_navig&z=16"
 VK_REVIEWS        = "https://vk.ru/club211270509?w=reviews"
 
-ADDRESS     = "📍 Крыленко 14 стр3, домофон 116, этаж 8"
-ADDRESS_LAT = 59.895772
-ADDRESS_LON = 30.465483
-YANDEX_URL  = f"https://yandex.ru/maps/?pt={ADDRESS_LON},{ADDRESS_LAT}&z=17&l=map"
+# Адрес и координаты берутся из конфига через get_address(), get_address_lat(), get_address_lon()
+# Ссылки на отзывы берутся из конфига
 # ENTRY_PHOTO = "https://..."  # ссылка на фото входа — добавьте позже
 
-SCHEDULE = {0: 18, 1: 18, 2: 18, 3: 18, 4: 10, 5: 10, 6: 10}
-DAY_END       = 24
-SLOT_DURATION = 5  # часов занимает процедура
-SLOT_STEP     = 30  # минут — шаг слотов
+# SCHEDULE, DAY_END, SLOT_DURATION, SLOT_STEP берутся из конфига
 
 KERATIN_PRICES = {
     30: {"price": 4000, "hours": 3}, 35: {"price": 4500, "hours": 3},
@@ -259,7 +258,7 @@ async def get_dates(offset=0):
     today = datetime.now().date()
     while len(dates) < 14:
         d = today + timedelta(days=i)
-        if d.weekday() in SCHEDULE and not await db_is_blocked(d):
+        if d.weekday() in get_schedule() and not await db_is_blocked(d):
             count += 1
             if count > offset:
                 dates.append(d)
@@ -270,9 +269,11 @@ async def get_dates(offset=0):
 
 async def get_available_slots(d: date, period: str = None):
     """period: 'morning' 10-13, 'day' 13-16, 'evening' 16-19:30"""
-    start_hour = SCHEDULE.get(d.weekday())
+    start_hour = get_schedule().get(d.weekday())
     if start_hour is None or await db_is_blocked(d):
         return []
+    SLOT_DURATION = get_slot_duration()
+    SLOT_STEP = get_slot_step()
     booked = await db_get_booked_slots_minutes(d)  # множество занятых минут от полуночи
 
     # Диапазон периода
@@ -360,8 +361,8 @@ def schedule_reminders(booking_id: str, b: dict):
 
     async def send_review_request(uid, name):
         kb = InlineKeyboardBuilder()
-        kb.button(text="⭐ Отзыв на Яндекс.Картах", url=YANDEX_REVIEWS)
-        kb.button(text="⭐ Отзыв ВКонтакте", url=VK_REVIEWS)
+        kb.button(text="⭐ Отзыв на Яндекс.Картах", url=cfg("yandex_reviews"))
+        kb.button(text="⭐ Отзыв ВКонтакте", url=cfg("vk_reviews"))
         kb.button(text="👍 Всё отлично, спасибо!", callback_data="review_skip")
         kb.adjust(1)
         try:
@@ -393,7 +394,7 @@ def schedule_reminders(booking_id: str, b: dict):
     r2 = visit_dt - timedelta(hours=2)
     if r2 > now:
         scheduler.add_job(remind, "date", run_date=r2,
-            args=[b["user_id"], f"⏰ <b>Через 2 часа</b> ваша процедура!\n{b['service']}\nв {b['time']}\n\n{ADDRESS}"],
+            args=[b["user_id"], f"⏰ <b>Через 2 часа</b> ваша процедура!\n{b['service']}\nв {b['time']}\n\n{get_address()}"],
             id=f"r2_{booking_id}", replace_existing=True)
 
     # Через 2 часа после СТАРТА — инструкция по уходу
@@ -441,28 +442,40 @@ def admin_kb():
 def get_kb(user_id: int):
     return admin_kb() if user_id == ADMIN_ID else main_kb()
 
-MAIN_TEXT = "✨ <b>Кератин&Ботокс</b>\n\nПривет! Я помогу вам записаться на процедуру.\nВыберите действие:"
+def get_main_text():
+    return f"✨ <b>{cfg('salon_name', 'Кератин&Ботокс')}</b>\n\n{cfg('welcome_text', 'Привет! Я помогу вам записаться на процедуру.')}\nВыберите действие:"
 
 # ── СТАРТ ─────────────────────────────────────────────────────────────────────
 @dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(MAIN_TEXT, reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
+    await message.answer(get_main_text(), reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
 
 # ── ПРАЙС ─────────────────────────────────────────────────────────────────────
 @dp.message(F.text == "💰 Прайс")
 @dp.message(Command("price"))
 async def show_price(message: Message):
+    import os
     from aiogram.types import FSInputFile
-    await message.answer_photo(FSInputFile("/app/price1.jpg"))
-    await message.answer_photo(FSInputFile("/app/price2.jpg"), reply_markup=get_kb(message.from_user.id))
+    if os.path.exists("/app/price1.jpg"):
+        await message.answer_photo(FSInputFile("/app/price1.jpg"))
+    if os.path.exists("/app/price2.jpg"):
+        await message.answer_photo(FSInputFile("/app/price2.jpg"))
+    # Текстовый прайс из таблицы
+    lines = ["💰 <b>Прайс-лист</b>\n"]
+    for svc in get_services():
+        if svc["price"] > 0:
+            lines.append(f"{svc['name']} — {svc['price']:,} ₽".replace(",", " "))
+        elif svc["type"] == "complex":
+            lines.append(f"{svc['name']} — от 4 000 ₽")
+    await message.answer("\n".join(lines), reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
 
 # ── КАК ПРОЙТИ ────────────────────────────────────────────────────────────────
 @dp.message(F.text == "🗺 Как пройти")
 async def how_to_get(message: Message):
     kb = InlineKeyboardBuilder()
-    kb.button(text="🗺 Открыть в Яндекс.Картах", url=YANDEX_URL)
-    await message.answer_location(latitude=ADDRESS_LAT, longitude=ADDRESS_LON)
+    kb.button(text="🗺 Открыть в Яндекс.Картах", url=f"https://yandex.ru/maps/?pt={get_address_lon()},{get_address_lat()}&z=17&l=map")
+    await message.answer_location(latitude=get_address_lat(), longitude=get_address_lon())
     await message.answer(
         f"<b>Как нас найти:</b>\n\n{ADDRESS}\n\n"
         f"🚇 Ближайшее метро: Улица Дыбенко\n"
@@ -563,12 +576,8 @@ async def btn_book(message: Message, state: FSMContext):
 
 async def show_services(message: Message, state: FSMContext):
     kb = InlineKeyboardBuilder()
-    kb.button(text="💎 Кератиновое выпрямление",            callback_data="svc_keratin")
-    kb.button(text="❄️ Холодное восстановление",            callback_data="svc_cold_restore")
-    kb.button(text="🌿 Пилинг кожи головы",                 callback_data="svc_scalp_peeling")
-    kb.button(text="✂️ Стрижка кончиков (без процедуры)",   callback_data="svc_trim_only")
-    kb.button(text="💫 Кератин чёлки",                      callback_data="svc_keratin_bangs")
-    kb.button(text="🔄 Прикорневая зона",                   callback_data="svc_root_zone")
+    for svc in get_services():
+        kb.button(text=svc["name"], callback_data=f"svc_{svc['id']}")
     kb.adjust(1)
     await state.set_state(BookingStates.choosing_service)
     await message.answer("💆 <b>Выберите услугу:</b>", reply_markup=kb.as_markup(), parse_mode="HTML")
@@ -576,7 +585,7 @@ async def show_services(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "svc_keratin")
 async def choose_length(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
-    for l in KERATIN_PRICES:
+    for l in get_keratin_prices():
         kb.button(text=f"{l} см", callback_data=f"len_{l}")
     kb.button(text="🤷 Не знаю свою длину", callback_data="len_unknown")
     kb.adjust(3)
@@ -611,7 +620,7 @@ async def thickness_unknown(callback: CallbackQuery, state: FSMContext):
     length = data["length"]
     price  = KERATIN_PRICES[length]["price"]
     await state.update_data(thickness="уточняется у мастера", price=price,
-                            hours=KERATIN_PRICES[length]["hours"],
+                            hours=get_keratin_prices()[length]["hours"],
                             service_name=f"Кератиновое выпрямление {length} см")
     await show_dates(callback, state)
 
@@ -620,18 +629,19 @@ async def after_thickness(callback: CallbackQuery, state: FSMContext):
     thickness = callback.data[6:]
     data = await state.get_data()
     length = data["length"]
-    price  = KERATIN_PRICES[length]["price"] + THICKNESS_PRICES[thickness]
+    price  = get_keratin_prices()[length]["price"] + get_thickness_prices()[thickness]
     await state.update_data(thickness=thickness, price=price,
-                            hours=KERATIN_PRICES[length]["hours"],
+                            hours=get_keratin_prices()[length]["hours"],
                             service_name=f"Кератиновое выпрямление {length} см")
     await show_dates(callback, state)
 
 @dp.callback_query(F.data.startswith("svc_") & ~F.data.endswith("keratin"))
 async def choose_other(callback: CallbackQuery, state: FSMContext):
-    svc = OTHER_SERVICES.get(callback.data[4:])
+    svc_id = callback.data[4:]
+    svc = next((s for s in get_services() if s["id"] == svc_id), None)
     if not svc: return
     await state.update_data(service_name=svc["name"], price=svc["price"],
-                            hours=svc["hours"], thickness="")
+                            hours=get_slot_duration(), thickness="")
     await show_dates(callback, state)
 
 async def show_dates(callback: CallbackQuery, state: FSMContext, offset: int = 0):
