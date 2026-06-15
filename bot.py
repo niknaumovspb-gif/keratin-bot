@@ -16,7 +16,8 @@ from googleapiclient.discovery import build
 import asyncpg
 from config_loader import (load_config, cfg, get_services, get_schedule,
     get_keratin_prices, get_thickness_prices, get_slot_duration,
-    get_slot_step, get_day_end, get_address, get_address_lat, get_address_lon)
+    get_slot_step, get_day_end, get_address, get_address_lat, get_address_lon,
+    get_admin_ids, get_notify_id)
 import os
 import json
 
@@ -77,6 +78,13 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
+
+
+APPROXIMATE_THICKNESS = {"более 13 см", "нарощенные волосы", "уточняется у мастера"}
+
+def _is_price_approximate(thickness: str) -> bool:
+    """Цена приблизительная если густота неизвестна или в открытом диапазоне."""
+    return thickness in APPROXIMATE_THICKNESS
 
 def _get_price_prefix(service_id: str) -> str:
     """Возвращает префикс цены ('от ') для услуги по её id."""
@@ -511,7 +519,7 @@ def admin_kb():
     return kb.as_markup(resize_keyboard=True)
 
 def get_kb(user_id: int):
-    return admin_kb() if user_id == ADMIN_ID else main_kb()
+    return admin_kb() if user_id in get_admin_ids() else main_kb()
 
 def get_main_text():
     return f"✨ <b>{cfg('salon_name', 'Кератин&Ботокс')}</b>\n\n{cfg('welcome_text', 'Привет! Я помогу вам записаться на процедуру.')}\nВыберите действие:"
@@ -809,8 +817,8 @@ async def ask_contact(callback: CallbackQuery, state: FSMContext):
         f"Услуга: {data['service_name']}{thick}\n"
         f"Дата: {data['date_display']}\n"
         f"Время: {time_str}\n"
-        f"Стоимость: {'от ' if data.get('thickness') == 'уточняется у мастера' else ''}{fmt_price(data['price'])}\n"
-        f"{'<i>⚠️ Точная сумма уточняется с учётом густоты</i>\n' if data.get('thickness') == 'уточняется у мастера' else ''}\n"
+        f"Стоимость: {'от ' if _is_price_approximate(data.get('thickness','')) else ''}{fmt_price(data['price'])}\n"
+        f"{'<i>⚠️ Ксения свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(data.get('thickness','')) else ''}\n"
         f"Как с вами связаться?\n"
         f"<i>Напишите номер телефона или @username в Telegram</i>",
         parse_mode="HTML")
@@ -842,21 +850,23 @@ async def finalize(message: Message, state: FSMContext):
         f"Услуга: {b['service']}{thick}\n"
         f"Дата: {b['date_display']}\n"
         f"Время: {b['time']}\n"
-        f"Стоимость: {'от ' if b.get('thickness') == 'уточняется у мастера' else ''}{fmt_price(b['price'])}\n"
-        f"{'<i>⚠️ Точная сумма будет уточнена мастером</i>\n' if b.get('thickness') == 'уточняется у мастера' else ''}\n"
+        f"Стоимость: {'от ' if _is_price_approximate(b.get('thickness','')) else ''}{fmt_price(b['price'])}\n"
+        f"{'<i>⚠️ Ксения свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(b.get('thickness','')) else ''}\n"
         f"{get_address()}\n\n"
         f"Напомню за 24 ч и за 2 ч до визита 🔔",
         reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
-    try:
-        await bot.send_message(ADMIN_ID,
-            f"🆕 <b>Новая запись!</b>\n\n"
-            f"👤 {b['name']}\n📱 {contact}\n"
-            f"💆 {b['service']}{thick}\n"
-            f"📅 {b['date_display']} в {b['time']}\n"
-            f"💰 {fmt_price(b['price'])}",
-            parse_mode="HTML")
-    except Exception as e:
-        logging.error(e)
+    notify = get_notify_id()
+    if notify:
+        try:
+            await bot.send_message(notify,
+                f"🆕 <b>Новая запись!</b>\n\n"
+                f"👤 {b['name']}\n📱 {contact}\n"
+                f"💆 {b['service']}{thick}\n"
+                f"📅 {b['date_display']} в {b['time']}\n"
+                f"💰 {fmt_price(b['price'])}",
+                parse_mode="HTML")
+        except Exception as e:
+            logging.error(e)
     await state.clear()
 
 
@@ -979,7 +989,7 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("reschedule_admin_"))
 async def admin_reschedule_start(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     booking_id = callback.data[17:]
     b = await db_get_booking_by_id(booking_id)
     if not b:
@@ -1007,7 +1017,7 @@ async def admin_reschedule_start(callback: CallbackQuery, state: FSMContext):
 
 # ── АДМИН-ПАНЕЛЬ ──────────────────────────────────────────────────────────────
 def is_admin(message: Message):
-    return message.from_user.id == ADMIN_ID
+    return message.from_user.id in get_admin_ids()
 
 @dp.message(F.text == "👑 Админ-панель")
 async def admin_panel(message: Message):
@@ -1023,7 +1033,7 @@ async def admin_panel(message: Message):
 
 @dp.callback_query(F.data == "admin_all_bookings")
 async def admin_all_bookings(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     bookings = await db_get_all_bookings()
     if not bookings:
         await callback.message.edit_text("Записей нет.")
@@ -1047,7 +1057,7 @@ async def admin_all_bookings(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("cancel_admin_"))
 async def admin_cancel_booking(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     booking_id = callback.data[13:]
     b = await db_cancel_booking(booking_id)
     if b:
@@ -1069,13 +1079,13 @@ async def admin_cancel_booking(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "admin_block_pick")
 async def admin_block_pick(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     await state.update_data(block_action="block")
     await _show_admin_date_picker(callback, state, "block")
 
 @dp.callback_query(F.data == "admin_unblock_pick")
 async def admin_unblock_pick(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     # Показываем только уже заблокированные дни
     blocked = await db_get_blocked_dates()
     if not blocked:
@@ -1119,13 +1129,13 @@ async def _show_admin_date_picker(callback: CallbackQuery, state: FSMContext, ac
 
 @dp.callback_query(F.data.startswith("admin_block_more_"))
 async def admin_block_more(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     offset = int(callback.data.split("_")[-1])
     await _show_admin_date_picker(callback, state, "block", offset)
 
 @dp.callback_query(F.data.startswith("admin_do_block_"))
 async def admin_do_block(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     date_str = callback.data[15:]
     d = datetime.strptime(date_str, "%Y-%m-%d").date()
     await db_block_date(date_str, "")
@@ -1138,7 +1148,7 @@ async def admin_do_block(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data.startswith("admin_do_unblock_"))
 async def admin_do_unblock(callback: CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     date_str = callback.data[17:]
     d = datetime.strptime(date_str, "%Y-%m-%d").date()
     await db_unblock_date(date_str)
@@ -1151,7 +1161,7 @@ async def admin_do_unblock(callback: CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "admin_panel")
 async def admin_panel_cb(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     kb = InlineKeyboardBuilder()
     kb.button(text="📋 Все записи",         callback_data="admin_all_bookings")
     kb.button(text="🚫 Заблокировать день",  callback_data="admin_block_pick")
@@ -1163,7 +1173,7 @@ async def admin_panel_cb(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "admin_blocked_list")
 async def admin_blocked_list(callback: CallbackQuery):
-    if callback.from_user.id != ADMIN_ID: return
+    if callback.from_user.id not in get_admin_ids(): return
     blocked = await db_get_blocked_dates()
     if not blocked:
         await callback.message.edit_text("Нет заблокированных дней.")
