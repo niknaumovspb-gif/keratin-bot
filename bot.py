@@ -198,6 +198,17 @@ async def db_get_all_booked_slots_range(date_from: date, date_to: date) -> dict:
         result.setdefault(d_str, set()).add(h * 60 + m)
     return result
 
+
+async def db_get_blocked_dates_set(date_from: date, date_to: date) -> set:
+    """Один запрос — все заблокированные даты за период."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT date FROM blocked_dates WHERE date >= $1 AND date <= $2",
+            str(date_from), str(date_to)
+        )
+    return {r["date"] for r in rows}
+
 async def db_get_booking_by_id(booking_id: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -299,16 +310,16 @@ async def get_dates(offset=0):
     date_from = today + timedelta(days=1)
     date_to   = today + timedelta(days=120)
 
-    # Один запрос к БД для всех дат
-    booked_cache = await db_get_all_booked_slots_range(date_from, date_to)
+    # Два запроса к БД — всё сразу
+    booked_cache  = await db_get_all_booked_slots_range(date_from, date_to)
+    blocked_cache = await db_get_blocked_dates_set(date_from, date_to)
 
     dates, count, i = [], 0, 1
     while len(dates) < 14:
         d = today + timedelta(days=i)
-        if d.weekday() in get_schedule() and not await db_is_blocked(d):
+        if d.weekday() in get_schedule() and str(d) not in blocked_cache:
             booked = booked_cache.get(str(d), set())
-            has_slots = _has_available_slots(d, booked)
-            if has_slots:
+            if _has_available_slots(d, booked):
                 count += 1
                 if count > offset:
                     dates.append(d)
