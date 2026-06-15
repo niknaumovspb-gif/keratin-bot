@@ -297,7 +297,7 @@ def _has_available_slots(d: date, booked_minutes: set) -> bool:
         return False
     slot_dur = get_slot_duration() * 60
     slot_step = get_slot_step()
-    last_start = (get_day_end() - get_slot_duration()) * 60
+    last_start = get_day_end() * 60  # day_end = последний возможный час НАЧАЛА процедуры
     t = start_hour * 60
     while t <= last_start:
         if not any(abs(t - bm) < slot_dur for bm in booked_minutes):
@@ -346,7 +346,7 @@ async def get_available_slots(d: date, period: str = None):
         p_start, p_end = max(start_hour * 60, 16 * 60), 20 * 60
     else:
         p_start = start_hour * 60
-        p_end = (DAY_END - SLOT_DURATION) * 60
+        p_end = get_day_end() * 60
 
     slots = []
     t = p_start
