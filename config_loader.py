@@ -75,10 +75,11 @@ def load_config():
         for r in rows:
             if len(r) >= 4 and r[0]:
                 _services.append({
-                    "id":    r[0].strip(),
-                    "name":  r[1].strip(),
-                    "price": int(r[2]) if r[2].strip().isdigit() else 0,
-                    "type":  r[3].strip(),  # simple / complex
+                    "id":           r[0].strip(),
+                    "name":         r[1].strip(),
+                    "price":        int(r[2]) if r[2].strip().isdigit() else 0,
+                    "type":         r[3].strip(),  # simple / complex
+                    "price_prefix": r[4].strip() if len(r) >= 5 else "",  # "от" или пусто
                 })
         logging.info(f"Services загружено: {len(_services)} услуг")
 
@@ -114,12 +115,12 @@ def _set_defaults():
         "day_end":        "20",
     }
     _services = [
-        {"id": "keratin",       "name": "Кератиновое выпрямление",         "price": 0,    "type": "complex"},
-        {"id": "cold_restore",  "name": "Холодное восстановление",          "price": 4500, "type": "simple"},
-        {"id": "scalp_peeling", "name": "Пилинг кожи головы",               "price": 1000, "type": "simple"},
-        {"id": "trim_only",     "name": "Стрижка кончиков без процедуры",   "price": 800,  "type": "simple"},
-        {"id": "keratin_bangs", "name": "Кератин чёлки",                    "price": 2000, "type": "simple"},
-        {"id": "root_zone",     "name": "Прикорневая зона*",                "price": 4000, "type": "simple"},
+        {"id": "keratin",       "name": "Кератиновое выпрямление",         "price": 0,    "type": "complex", "price_prefix": "от"},
+        {"id": "cold_restore",  "name": "Холодное восстановление",          "price": 4500, "type": "simple",  "price_prefix": ""},
+        {"id": "scalp_peeling", "name": "Пилинг кожи головы",               "price": 1000, "type": "simple",  "price_prefix": ""},
+        {"id": "trim_only",     "name": "Стрижка кончиков без процедуры",   "price": 800,  "type": "simple",  "price_prefix": ""},
+        {"id": "keratin_bangs", "name": "Кератин чёлки",                    "price": 2000, "type": "simple",  "price_prefix": ""},
+        {"id": "root_zone",     "name": "Прикорневая зона*",                "price": 4000, "type": "simple",  "price_prefix": ""},
     ]
     _schedule = {0: 18, 1: 18, 2: 18, 3: 18, 4: 10, 5: 10, 6: 10}
     _keratin_prices = KERATIN_PRICES_DEFAULT
