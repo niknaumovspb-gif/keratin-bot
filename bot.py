@@ -205,7 +205,7 @@ def gcal_add_event(b: dict):
         return
     try:
         dt_str = f"{b['date']}T{b['time']}:00"
-        end_dt = (datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S") + timedelta(hours=SLOT_DURATION)).strftime("%Y-%m-%dT%H:%M:%S")
+        end_dt = (datetime.strptime(dt_str, "%Y-%m-%dT%H:%M:%S") + timedelta(hours=get_slot_duration())).strftime("%Y-%m-%dT%H:%M:%S")
         price  = "уточняется" if b["price"] == -1 else fmt_price(b["price"])
         thick  = f", густота {b['thickness']}" if b.get("thickness") else ""
         svc.events().insert(calendarId=CALENDAR_ID, body={
@@ -477,7 +477,7 @@ async def how_to_get(message: Message):
     kb.button(text="🗺 Открыть в Яндекс.Картах", url=f"https://yandex.ru/maps/?pt={get_address_lon()},{get_address_lat()}&z=17&l=map")
     await message.answer_location(latitude=get_address_lat(), longitude=get_address_lon())
     await message.answer(
-        f"<b>Как нас найти:</b>\n\n{ADDRESS}\n\n"
+        f"<b>Как нас найти:</b>\n\n{get_address()}\n\n"
         f"🚇 Ближайшее метро: Улица Дыбенко\n"
         f"🚶 От метро ~10 минут пешком\n\n"
         f"Можно войти с обеих сторон дома, домофон 116, лифт на 8 этаж.",
@@ -500,7 +500,7 @@ async def confirm_yes(callback: CallbackQuery):
         except: pass
         await callback.message.edit_text(
             f"✅ <b>Отлично, ждём вас!</b>\n\n"
-            f"💆 {b['service']}\n📅 {b.get('date_display','')} в {b['time']}\n\n{ADDRESS}",
+            f"💆 {b['service']}\n📅 {b.get('date_display','')} в {b['time']}\n\n{get_address()}",
             parse_mode="HTML")
         try:
             await bot.send_message(ADMIN_ID,
@@ -743,7 +743,7 @@ async def finalize(message: Message, state: FSMContext):
         f"Дата: {b['date_display']}\n"
         f"Время: {b['time']}\n"
         f"Стоимость: {fmt_price(b['price'])}\n\n"
-        f"{ADDRESS}\n\n"
+        f"{get_address()}\n\n"
         f"Напомню за 24 ч и за 2 ч до визита 🔔",
         reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
     try:
@@ -858,7 +858,7 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
         f"✅ <b>Запись перенесена!</b>\n\n"
         f"💆 {old['service']}\n"
         f"📅 {data['new_date_display']} в {new_time}\n"
-        f"💰 {fmt_price(old['price'])}\n\n{ADDRESS}",
+        f"💰 {fmt_price(old['price'])}\n\n{get_address()}",
         parse_mode="HTML")
     try:
         await bot.send_message(ADMIN_ID,
