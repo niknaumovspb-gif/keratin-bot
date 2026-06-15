@@ -78,10 +78,10 @@ bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
 
-def _get_price_prefix(service_name: str) -> str:
-    """Возвращает префикс цены ('от ') для услуги по её названию."""
+def _get_price_prefix(service_id: str) -> str:
+    """Возвращает префикс цены ('от ') для услуги по её id."""
     for svc in get_services():
-        if svc["name"] in service_name or service_name in svc["name"]:
+        if svc["id"] == service_id:
             prefix = svc.get("price_prefix", "")
             return f"{prefix} " if prefix else ""
     return ""
@@ -640,6 +640,7 @@ async def thickness_unknown(callback: CallbackQuery, state: FSMContext):
     price  = KERATIN_PRICES[length]["price"]
     await state.update_data(thickness="уточняется у мастера", price=price,
                             hours=get_keratin_prices()[length]["hours"],
+                            service_id="keratin",
                             service_name=f"Кератиновое выпрямление {length} см")
     await show_dates(callback, state)
 
@@ -651,6 +652,7 @@ async def after_thickness(callback: CallbackQuery, state: FSMContext):
     price  = get_keratin_prices()[length]["price"] + get_thickness_prices()[thickness]
     await state.update_data(thickness=thickness, price=price,
                             hours=get_keratin_prices()[length]["hours"],
+                            service_id="keratin",
                             service_name=f"Кератиновое выпрямление {length} см")
     await show_dates(callback, state)
 
@@ -659,7 +661,7 @@ async def choose_other(callback: CallbackQuery, state: FSMContext):
     svc_id = callback.data[4:]
     svc = next((s for s in get_services() if s["id"] == svc_id), None)
     if not svc: return
-    await state.update_data(service_name=svc["name"], price=svc["price"],
+    await state.update_data(service_id=svc["id"], service_name=svc["name"], price=svc["price"],
                             hours=get_slot_duration(), thickness="")
     await show_dates(callback, state)
 
@@ -729,8 +731,8 @@ async def ask_contact(callback: CallbackQuery, state: FSMContext):
         f"Услуга: {data['service_name']}{thick}\n"
         f"Дата: {data['date_display']}\n"
         f"Время: {time_str}\n"
-        f"Стоимость: {_get_price_prefix(data.get('service',''))}{fmt_price(data['price'])}\n"
-        f"{('<i>⚠️ Точная сумма уточняется с учётом густоты</i>\n') if _get_price_prefix(data.get('service','')) else ''}\n"
+        f"Стоимость: {_get_price_prefix(data.get('service_id',''))}{fmt_price(data['price'])}\n"
+        f"{('<i>⚠️ Точная сумма уточняется с учётом густоты</i>\n') if _get_price_prefix(data.get('service_id','')) else ''}\n"
         f"Как с вами связаться?\n"
         f"<i>Напишите номер телефона или @username в Telegram</i>",
         parse_mode="HTML")
@@ -762,8 +764,8 @@ async def finalize(message: Message, state: FSMContext):
         f"Услуга: {b['service']}{thick}\n"
         f"Дата: {b['date_display']}\n"
         f"Время: {b['time']}\n"
-        f"Стоимость: {_get_price_prefix(b.get('service',''))}{fmt_price(b['price'])}\n"
-        f"{('<i>⚠️ Точная сумма будет уточнена мастером</i>\n') if _get_price_prefix(b.get('service','')) else ''}\n"
+        f"Стоимость: {_get_price_prefix(b.get('service_id',''))}{fmt_price(b['price'])}\n"
+        f"{('<i>⚠️ Точная сумма будет уточнена мастером</i>\n') if _get_price_prefix(b.get('service_id','')) else ''}\n"
         f"{get_address()}\n\n"
         f"Напомню за 24 ч и за 2 ч до визита 🔔",
         reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
