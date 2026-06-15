@@ -486,7 +486,8 @@ async def show_price(message: Message):
             lines.append(f"{svc['name']} — {price_str}")
         await message.answer("\n".join(lines), reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
     else:
-        await message.answer("Выберите действие:", reply_markup=get_kb(message.from_user.id))
+        # Только картинки — клавиатура уже видна внизу, ничего не пишем
+        pass
 
 # ── КАК ПРОЙТИ ────────────────────────────────────────────────────────────────
 @dp.message(F.text == "🗺 Как пройти")
