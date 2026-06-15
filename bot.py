@@ -455,7 +455,7 @@ def schedule_reminders(booking_id: str, b: dict):
 
     async def notify_admin_no_confirm(name, service, date_display, time_str):
         try:
-            await bot.send_message(ADMIN_ID,
+            await bot.send_message(get_notify_id(),
                 f"⚠️ <b>Клиент не подтвердил запись!</b>\n\n"
                 f"👤 {name}\n💆 {service}\n📅 {date_display} в {time_str}\n\n"
                 f"Рекомендуем связаться с клиентом.", parse_mode="HTML")
@@ -592,7 +592,7 @@ async def confirm_yes(callback: CallbackQuery):
             f"💆 {b['service']}\n📅 {b.get('date_display','')} в {b['time']}\n\n{get_address()}",
             parse_mode="HTML")
         try:
-            await bot.send_message(ADMIN_ID,
+            await bot.send_message(get_notify_id(),
                 f"✅ <b>{b['name']} подтвердил запись!</b>\n"
                 f"📅 {b.get('date_display','')} в {b['time']}", parse_mode="HTML")
         except Exception as e: logging.error(e)
@@ -609,7 +609,7 @@ async def confirm_no(callback: CallbackQuery):
             "❌ Ваша запись отменена. Будем рады видеть вас в другой раз!\n\n"
             "Для новой записи нажмите «💆 Записаться»")
         try:
-            await bot.send_message(ADMIN_ID,
+            await bot.send_message(get_notify_id(),
                 f"❌ <b>{b['name']} отменил запись!</b>\n"
                 f"💆 {b['service']}\n📅 {b.get('date_display','')} в {b['time']}", parse_mode="HTML")
         except Exception as e: logging.error(e)
@@ -646,7 +646,7 @@ async def cancel_booking(callback: CallbackQuery):
         await callback.message.edit_text(
             f"✅ Запись отменена:\n{b['service']}\n{fmt_date(d)} в {b['time']}", parse_mode="HTML")
         try:
-            await bot.send_message(ADMIN_ID,
+            await bot.send_message(get_notify_id(),
                 f"❌ <b>Клиент отменил запись!</b>\n\n"
                 f"👤 {b['name']}\n📱 {b['contact']}\n"
                 f"💆 {b['service']}\n📅 {fmt_date(d)} в {b['time']}",
