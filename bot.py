@@ -77,6 +77,15 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
+
+def _get_price_prefix(service_name: str) -> str:
+    """Возвращает префикс цены ('от ') для услуги по её названию."""
+    for svc in get_services():
+        if svc["name"] in service_name or service_name in svc["name"]:
+            prefix = svc.get("price_prefix", "")
+            return f"{prefix} " if prefix else ""
+    return ""
+
 # ── БАЗА ДАННЫХ (asyncpg) ─────────────────────────────────────────────────────
 _pool = None
 
@@ -710,8 +719,8 @@ async def ask_contact(callback: CallbackQuery, state: FSMContext):
         f"Услуга: {data['service_name']}{thick}\n"
         f"Дата: {data['date_display']}\n"
         f"Время: {time_str}\n"
-        f"Стоимость: {'от ' if data.get('price_approximate') else ''}{fmt_price(data['price'])}\n"
-        f"{'<i>⚠️ Точная сумма уточняется с учётом густоты</i>\n' if data.get('price_approximate') else ''}\n"
+        f"Стоимость: {_get_price_prefix(data.get('service',''))}{fmt_price(data['price'])}\n"
+        f"{('<i>⚠️ Точная сумма уточняется с учётом густоты</i>\n') if _get_price_prefix(data.get('service','')) else ''}\n"
         f"Как с вами связаться?\n"
         f"<i>Напишите номер телефона или @username в Telegram</i>",
         parse_mode="HTML")
@@ -743,8 +752,8 @@ async def finalize(message: Message, state: FSMContext):
         f"Услуга: {b['service']}{thick}\n"
         f"Дата: {b['date_display']}\n"
         f"Время: {b['time']}\n"
-        f"Стоимость: {'от ' if data.get('price_approximate') else ''}{fmt_price(b['price'])}\n"
-        f"{'<i>⚠️ Точная сумма будет уточнена мастером</i>\n' if data.get('price_approximate') else ''}\n"
+        f"Стоимость: {_get_price_prefix(b.get('service',''))}{fmt_price(b['price'])}\n"
+        f"{('<i>⚠️ Точная сумма будет уточнена мастером</i>\n') if _get_price_prefix(b.get('service','')) else ''}\n"
         f"{get_address()}\n\n"
         f"Напомню за 24 ч и за 2 ч до визита 🔔",
         reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
