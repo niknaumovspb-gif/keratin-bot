@@ -1133,8 +1133,7 @@ async def admin_do_block(callback: CallbackQuery, state: FSMContext):
     kb.button(text="◀️ В админ-панель", callback_data="admin_panel")
     kb.adjust(1)
     await callback.message.edit_text(
-        f"🚫 День <b>{fmt_date(d)}</b> заблокирован.
-Клиенты не смогут записаться на этот день.",
+        f"🚫 День <b>{fmt_date(d)}</b> заблокирован.\nКлиенты не смогут записаться на этот день.",
         reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("admin_do_unblock_"))
