@@ -988,20 +988,33 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
     old_date_display = old.get("date_display", "")
     old_time = old["time"]
     await callback.message.edit_text(
-        f"✅ <b>Запись перенесена!</b>\n\n"
-        f"💆 {updated['service']}\n"
-        f"📅 {data['new_date_display']} в {new_time}\n"
-        f"💰 {fmt_price(updated['price'])}\n\n{get_address()}",
+        f"\u2705 <b>\u0417\u0430\u043f\u0438\u0441\u044c \u043f\u0435\u0440\u0435\u043d\u0435\u0441\u0435\u043d\u0430!</b>\n\n"
+        f"\U0001f48e {updated['service']}\n"
+        f"\U0001f4c5 {data['new_date_display']} \u0432 {new_time}\n"
+        f"\U0001f4b0 {fmt_price(updated['price'])}\n\n{get_address()}",
         parse_mode="HTML")
+
+    if callback.from_user.id in get_admin_ids() and callback.from_user.id != updated["user_id"]:
+        try:
+            await bot.send_message(updated["user_id"],
+                f"\U0001f504 <b>\u0412\u0430\u0448\u0430 \u0437\u0430\u043f\u0438\u0441\u044c \u043f\u0435\u0440\u0435\u043d\u0435\u0441\u0435\u043d\u0430 \u043c\u0430\u0441\u0442\u0435\u0440\u043e\u043c</b>\n\n"
+                f"\U0001f48e {updated['service']}\n"
+                f"\u0411\u044b\u043b\u043e: {old_date_display} \u0432 {old_time}\n"
+                f"\u0421\u0442\u0430\u043b\u043e: {data['new_date_display']} \u0432 {new_time}\n\n"
+                f"{get_address()}",
+                parse_mode="HTML")
+        except Exception as e:
+            logging.error(e)
+
     notify = get_notify_id()
     if notify:
         try:
             await bot.send_message(notify,
-                f"🔄 <b>Перенос записи!</b>\n\n"
-                f"👤 {updated['name']} · {updated['contact']}\n"
-                f"💆 {updated['service']}\n"
-                f"Было: {old_date_display} в {old_time}\n"
-                f"Стало: {data['new_date_display']} в {new_time}",
+                f"\U0001f504 <b>\u041f\u0435\u0440\u0435\u043d\u043e\u0441 \u0437\u0430\u043f\u0438\u0441\u0438!</b>\n\n"
+                f"\U0001f464 {updated['name']} \u00b7 {updated['contact']}\n"
+                f"\U0001f48e {updated['service']}\n"
+                f"\u0411\u044b\u043b\u043e: {old_date_display} \u0432 {old_time}\n"
+                f"\u0421\u0442\u0430\u043b\u043e: {data['new_date_display']} \u0432 {new_time}",
                 parse_mode="HTML")
         except Exception as e:
             logging.error(e)
