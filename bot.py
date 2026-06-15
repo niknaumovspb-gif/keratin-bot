@@ -466,18 +466,27 @@ async def cmd_start(message: Message, state: FSMContext):
 async def show_price(message: Message):
     import os
     from aiogram.types import FSInputFile
-    if os.path.exists("/app/price1.jpg"):
-        await message.answer_photo(FSInputFile("/app/price1.jpg"))
-    if os.path.exists("/app/price2.jpg"):
-        await message.answer_photo(FSInputFile("/app/price2.jpg"))
-    # Текстовый прайс из таблицы
-    lines = ["💰 <b>Прайс-лист</b>\n"]
-    for svc in get_services():
-        if svc["price"] > 0:
-            lines.append(f"{svc['name']} — {svc['price']:,} ₽".replace(",", " "))
-        elif svc["type"] == "complex":
-            lines.append(f"{svc['name']} — от 4 000 ₽")
-    await message.answer("\n".join(lines), reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
+
+    mode = cfg("price_display", "both")  # image / text / both
+
+    if mode in ("image", "both"):
+        if os.path.exists("/app/price1.jpg"):
+            await message.answer_photo(FSInputFile("/app/price1.jpg"))
+        if os.path.exists("/app/price2.jpg"):
+            await message.answer_photo(FSInputFile("/app/price2.jpg"))
+
+    if mode in ("text", "both"):
+        lines = ["💰 <b>Прайс-лист</b>\n"]
+        for svc in get_services():
+            prefix = svc.get("price_prefix", "")
+            if svc["price"] > 0:
+                price_str = f"{prefix + ' ' if prefix else ''}{svc['price']:,} ₽".replace(",", " ")
+            else:
+                price_str = "уточняется у мастера"
+            lines.append(f"{svc['name']} — {price_str}")
+        await message.answer("\n".join(lines), reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
+    else:
+        await message.answer("Выберите действие:", reply_markup=get_kb(message.from_user.id))
 
 # ── КАК ПРОЙТИ ────────────────────────────────────────────────────────────────
 @dp.message(F.text == "🗺 Как пройти")
