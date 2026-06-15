@@ -80,7 +80,7 @@ dp  = Dispatcher(storage=MemoryStorage())
 
 
 
-APPROXIMATE_THICKNESS = {"более 13 см", "нарощенные волосы", "уточняется у мастера"}
+APPROXIMATE_THICKNESS = {"более 13 см", "уточняется у мастера"}
 
 def _is_price_approximate(thickness: str) -> bool:
     """Цена приблизительная если густота неизвестна или в открытом диапазоне."""
