@@ -967,13 +967,19 @@ async def reschedule_time(callback: CallbackQuery, state: FSMContext):
         "service":      old["service"],
         "date":         data["new_date"],
         "time":         new_time,
-        "price":        old["price"],
+        "price":        old["price"] if old["price"] is not None else -1,
         "name":         old["name"],
         "contact":      old["contact"],
         "thickness":    old.get("thickness",""),
         "date_display": data["new_date_display"],
     }
-    await db_save_booking(new_id, new_b)
+    try:
+        await db_save_booking(new_id, new_b)
+        logging.info(f"Перенос сохранён: {new_id}")
+    except Exception as e:
+        logging.error(f"ОШИБКА сохранения переноса: {e}")
+        await callback.answer("Ошибка сохранения. Попробуйте ещё раз.", show_alert=True)
+        return
     schedule_reminders(new_id, new_b)
 
     await callback.message.edit_text(
