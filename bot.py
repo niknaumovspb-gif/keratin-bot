@@ -182,6 +182,22 @@ async def db_unblock_date(d: str):
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM blocked_dates WHERE date=$1", d)
 
+
+async def db_get_all_booked_slots_range(date_from: date, date_to: date) -> dict:
+    """Один запрос к БД — все занятые слоты за период. Возвращает {date_str: set(minutes)}"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT date, time FROM bookings WHERE date >= $1 AND date <= $2 AND status='active'",
+            str(date_from), str(date_to)
+        )
+    result = {}
+    for r in rows:
+        d_str = r["date"]
+        h, m = map(int, r["time"].split(":"))
+        result.setdefault(d_str, set()).add(h * 60 + m)
+    return result
+
 async def db_get_booking_by_id(booking_id: str):
     pool = await get_pool()
     async with pool.acquire() as conn:
@@ -262,14 +278,37 @@ def save_to_sheets(b: dict):
         logging.error(f"Sheets error: {e}")
 
 # ── ХЕЛПЕРЫ ───────────────────────────────────────────────────────────────────
+
+def _has_available_slots(d: date, booked_minutes: set) -> bool:
+    """Проверяет есть ли хотя бы один свободный слот — без запроса к БД."""
+    start_hour = get_schedule().get(d.weekday())
+    if start_hour is None:
+        return False
+    slot_dur = get_slot_duration() * 60
+    slot_step = get_slot_step()
+    last_start = (get_day_end() - get_slot_duration()) * 60
+    t = start_hour * 60
+    while t <= last_start:
+        if not any(abs(t - bm) < slot_dur for bm in booked_minutes):
+            return True
+        t += slot_step
+    return False
+
 async def get_dates(offset=0):
-    dates, count, i = [], 0, 1
     today = datetime.now().date()
+    date_from = today + timedelta(days=1)
+    date_to   = today + timedelta(days=120)
+
+    # Один запрос к БД для всех дат
+    booked_cache = await db_get_all_booked_slots_range(date_from, date_to)
+
+    dates, count, i = [], 0, 1
     while len(dates) < 14:
         d = today + timedelta(days=i)
         if d.weekday() in get_schedule() and not await db_is_blocked(d):
-            periods = await get_available_periods(d)
-            if periods:
+            booked = booked_cache.get(str(d), set())
+            has_slots = _has_available_slots(d, booked)
+            if has_slots:
                 count += 1
                 if count > offset:
                     dates.append(d)
