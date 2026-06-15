@@ -160,5 +160,24 @@ def get_address_lat():
 def get_address_lon():
     return float(cfg("address_lon", "30.465483"))
 
+def get_admin_ids() -> list:
+    """Список ID администраторов."""
+    ids_str = cfg("admin_ids", "")
+    if ids_str:
+        return [int(x.strip()) for x in ids_str.split(",") if x.strip().isdigit()]
+    # Фолбек на ADMIN_ID из переменных окружения
+    import os
+    admin_id = os.getenv("ADMIN_ID", "0")
+    return [int(admin_id)] if admin_id.isdigit() and int(admin_id) > 0 else []
+
+def get_notify_id() -> int:
+    """ID кому приходят уведомления о новых записях."""
+    notify_str = cfg("notify_id", "")
+    if notify_str.strip().isdigit():
+        return int(notify_str.strip())
+    # Фолбек на первого админа
+    ids = get_admin_ids()
+    return ids[0] if ids else 0
+
 # Загружаем конфиг при импорте модуля
 load_config()
