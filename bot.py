@@ -102,6 +102,10 @@ async def init_db():
                 created_at TIMESTAMP DEFAULT NOW()
             );
         """)
+        try:
+            await conn.execute("ALTER TABLE bookings ADD COLUMN sent_reminders TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 async def db_save_booking(booking_id: str, b: dict):
     pool = await get_pool()
@@ -174,6 +178,20 @@ async def db_unblock_date(d: str):
     async with pool.acquire() as conn:
         await conn.execute("DELETE FROM blocked_dates WHERE date=$1", d)
 
+
+async def db_mark_reminder_sent(booking_id: str, reminder_type: str):
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT sent_reminders FROM bookings WHERE id=$1", booking_id)
+        if row:
+            sent = row["sent_reminders"] or ""
+            if reminder_type not in sent.split(","):
+                new_val = f"{sent},{reminder_type}" if sent else reminder_type
+                await conn.execute("UPDATE bookings SET sent_reminders=$1 WHERE id=$2", new_val, booking_id)
+
+def _was_reminder_sent(booking: dict, reminder_type: str) -> bool:
+    sent = booking.get("sent_reminders", "") or ""
+    return reminder_type in sent.split(",")
 
 async def db_get_all_booked_slots_range(date_from: date, date_to: date) -> dict:
     """Один запрос к БД — все занятые слоты за период. Возвращает {date_str: set(minutes)}"""
@@ -388,97 +406,99 @@ def _cancel_reminder_jobs(booking_id: str):
         except Exception:
             pass
 
+async def _send_confirmation(uid, bk_id, name, service, date_display, time_str):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Подтверждаю запись", callback_data=f"confirm_yes_{bk_id}")
+    kb.button(text="❌ Отменить запись",    callback_data=f"confirm_no_{bk_id}")
+    kb.adjust(1)
+    try:
+        await bot.send_message(uid,
+            f"👋 <b>Напоминаем о вашей записи завтра!</b>\n\n"
+            f"💆 {service}\n📅 {date_display} в {time_str}\n\n"
+            f"Пожалуйста, подтвердите визит:",
+            reply_markup=kb.as_markup(), parse_mode="HTML")
+        await db_mark_reminder_sent(bk_id, "r24")
+    except Exception as e:
+        logging.error(e)
+
+async def _send_remind(uid, text, booking_id, reminder_type):
+    try:
+        await bot.send_message(uid, text, parse_mode="HTML")
+        await db_mark_reminder_sent(booking_id, reminder_type)
+    except Exception as e:
+        logging.error(e)
+
+async def _send_care_instructions(uid, booking_id):
+    import os
+    try:
+        if os.path.exists(CARE_PDF_PATH):
+            from aiogram.types import FSInputFile
+            await bot.send_document(uid, FSInputFile(CARE_PDF_PATH),
+                caption="📋 <b>Рекомендации по уходу после процедуры</b>\n\nСохраните этот документ!", parse_mode="HTML")
+        else:
+            logging.warning("care.pdf не найден")
+        await db_mark_reminder_sent(booking_id, "care")
+    except Exception as e:
+        logging.error(f"Care PDF error: {e}")
+
+async def _send_review_request(uid, name, booking_id):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⭐ Отзыв на Яндекс.Картах", url=cfg("yandex_reviews"))
+    kb.button(text="⭐ Отзыв ВКонтакте", url=cfg("vk_reviews"))
+    kb.button(text="👍 Всё отлично, спасибо!", callback_data="review_skip")
+    kb.adjust(1)
+    try:
+        await bot.send_message(uid,
+            f"✨ Надеемся, процедура прошла отлично!\n\n"
+            f"Если вам всё понравилось — будем очень благодарны за отзыв. "
+            f"Это занимает 1 минуту и очень помогает нам 🙏",
+            reply_markup=kb.as_markup())
+        await db_mark_reminder_sent(booking_id, "review")
+    except Exception as e:
+        logging.error(e)
+
+async def _notify_admin_no_confirm(name, service, date_display, time_str, booking_id):
+    try:
+        await bot.send_message(get_notify_id(),
+            f"⚠️ <b>Клиент не подтвердил запись!</b>\n\n"
+            f"👤 {name}\n💆 {service}\n📅 {date_display} в {time_str}\n\n"
+            f"Рекомендуем связаться с клиентом.", parse_mode="HTML")
+        await db_mark_reminder_sent(booking_id, "r23")
+    except Exception as e:
+        logging.error(e)
+
 def schedule_reminders(booking_id: str, b: dict):
     visit_dt = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M")
     now = datetime.now()
 
-    async def remind(uid, text):
-        try: await bot.send_message(uid, text, parse_mode="HTML")
-        except Exception as e: logging.error(e)
-
-    async def send_confirmation(uid, bk_id, name, service, date_display, time_str):
-        kb = InlineKeyboardBuilder()
-        kb.button(text="✅ Подтверждаю запись", callback_data=f"confirm_yes_{bk_id}")
-        kb.button(text="❌ Отменить запись",    callback_data=f"confirm_no_{bk_id}")
-        kb.adjust(1)
-        try:
-            await bot.send_message(uid,
-                f"👋 <b>Напоминаем о вашей записи завтра!</b>\n\n"
-                f"💆 {service}\n📅 {date_display} в {time_str}\n\n"
-                f"Пожалуйста, подтвердите визит:",
-                reply_markup=kb.as_markup(), parse_mode="HTML")
-        except Exception as e:
-            logging.error(e)
-
-    async def send_care_instructions(uid):
-        import os
-        try:
-            if os.path.exists(CARE_PDF_PATH):
-                from aiogram.types import FSInputFile
-                await bot.send_document(uid, FSInputFile(CARE_PDF_PATH),
-                    caption="📋 <b>Рекомендации по уходу после процедуры</b>\n\nСохраните этот документ!", parse_mode="HTML")
-            else:
-                logging.warning("care.pdf не найден")
-        except Exception as e:
-            logging.error(f"Care PDF error: {e}")
-
-    async def send_review_request(uid, name):
-        kb = InlineKeyboardBuilder()
-        kb.button(text="⭐ Отзыв на Яндекс.Картах", url=cfg("yandex_reviews"))
-        kb.button(text="⭐ Отзыв ВКонтакте", url=cfg("vk_reviews"))
-        kb.button(text="👍 Всё отлично, спасибо!", callback_data="review_skip")
-        kb.adjust(1)
-        try:
-            await bot.send_message(uid,
-                f"✨ Надеемся, процедура прошла отлично!\n\n"
-                f"Если вам всё понравилось — будем очень благодарны за отзыв. "
-                f"Это занимает 1 минуту и очень помогает нам 🙏",
-                reply_markup=kb.as_markup())
-        except Exception as e:
-            logging.error(e)
-
-    async def notify_admin_no_confirm(name, service, date_display, time_str):
-        try:
-            await bot.send_message(get_notify_id(),
-                f"⚠️ <b>Клиент не подтвердил запись!</b>\n\n"
-                f"👤 {name}\n💆 {service}\n📅 {date_display} в {time_str}\n\n"
-                f"Рекомендуем связаться с клиентом.", parse_mode="HTML")
-        except Exception as e:
-            logging.error(e)
-
-    # За 24 часа — запрос подтверждения
     r24 = visit_dt - timedelta(hours=24)
     if r24 > now:
-        scheduler.add_job(send_confirmation, "date", run_date=r24,
+        scheduler.add_job(_send_confirmation, "date", run_date=r24,
             args=[b["user_id"], booking_id, b["name"], b["service"], b.get("date_display",""), b["time"]],
             id=f"r24_{booking_id}", replace_existing=True)
 
-    # За 2 часа — напоминание
     r2 = visit_dt - timedelta(hours=2)
     if r2 > now:
-        scheduler.add_job(remind, "date", run_date=r2,
-            args=[b["user_id"], f"⏰ <b>Через 2 часа</b> ваша процедура!\n{b['service']}\nв {b['time']}\n\n{get_address()}"],
+        scheduler.add_job(_send_remind, "date", run_date=r2,
+            args=[b["user_id"], f"⏰ <b>Через 2 часа</b> ваша процедура!\n{b['service']}\nв {b['time']}\n\n{get_address()}", booking_id, "r2"],
             id=f"r2_{booking_id}", replace_existing=True)
 
-    # Через 2 часа после СТАРТА — инструкция по уходу
     care_time = visit_dt + timedelta(hours=2)
     if care_time > now:
-        scheduler.add_job(send_care_instructions, "date", run_date=care_time,
-            args=[b["user_id"]],
+        scheduler.add_job(_send_care_instructions, "date", run_date=care_time,
+            args=[b["user_id"], booking_id],
             id=f"care_{booking_id}", replace_existing=True)
 
-    # Если не подтвердил — уведомить админа (за 23 часа, т.е. через 1 час после запроса)
     r23 = visit_dt - timedelta(hours=23)
     if r23 > now:
-        scheduler.add_job(notify_admin_no_confirm, "date", run_date=r23,
-            args=[b["name"], b["service"], b.get("date_display",""), b["time"]],
+        scheduler.add_job(_notify_admin_no_confirm, "date", run_date=r23,
+            args=[b["name"], b["service"], b.get("date_display",""), b["time"], booking_id],
             id=f"r23_{booking_id}", replace_existing=True)
 
-    # Через 24 часа после визита — просьба оставить отзыв
     review_time = visit_dt + timedelta(hours=24)
     if review_time > now:
-        scheduler.add_job(send_review_request, "date", run_date=review_time,
-            args=[b["user_id"], b["name"]],
+        scheduler.add_job(_send_review_request, "date", run_date=review_time,
+            args=[b["user_id"], b["name"], booking_id],
             id=f"review_{booking_id}", replace_existing=True)
 
 # ── КЛАВИАТУРЫ ────────────────────────────────────────────────────────────────
@@ -1197,14 +1217,37 @@ async def admin_blocked_list(callback: CallbackQuery):
 async def restore_reminders():
     all_b = await db_get_all_bookings()
     now = datetime.now()
+    restored = 0
+    caught_up = 0
     for b in all_b:
         try:
             visit_dt = datetime.strptime(f"{b['date']} {b['time']}", "%Y-%m-%d %H:%M")
+
+            # Будущие напоминания — планируем как обычно
             if visit_dt > now:
                 schedule_reminders(b["id"], b)
+                restored += 1
+                continue
+
+            # Прошедшие записи — досылаем пропущенные напоминания
+            # Памятка по уходу (должна была уйти через 2ч после визита)
+            care_time = visit_dt + timedelta(hours=2)
+            if care_time <= now and not _was_reminder_sent(b, "care"):
+                # Не старше 3 дней — иначе уже неактуально
+                if (now - care_time).days < 3:
+                    await _send_care_instructions(b["user_id"], b["id"])
+                    caught_up += 1
+
+            # Отзыв (должен был уйти через 24ч после визита)
+            review_time = visit_dt + timedelta(hours=24)
+            if review_time <= now and not _was_reminder_sent(b, "review"):
+                if (now - review_time).days < 3:
+                    await _send_review_request(b["user_id"], b["name"], b["id"])
+                    caught_up += 1
+
         except Exception as e:
             logging.error(f"Restore reminder error: {e}")
-    logging.info(f"Restored {len(all_b)} reminders")
+    logging.info(f"Reminders: {restored} scheduled, {caught_up} caught up")
 
 async def main():
     await init_db()
