@@ -17,7 +17,9 @@ import asyncpg
 from config_loader import (load_config, cfg, get_services, get_schedule,
     get_keratin_prices, get_thickness_prices, get_slot_duration,
     get_slot_step, get_day_end, get_address, get_address_lat, get_address_lon,
-    get_admin_ids, get_notify_id, get_extension_note_ids)
+    get_admin_ids, get_notify_id, get_extension_note_ids,
+    get_metro, get_how_to_get_text, get_master_name,
+    get_yandex_reviews, get_vk_reviews)
 import os
 import json
 
@@ -26,37 +28,9 @@ BOT_TOKEN         = os.getenv("BOT_TOKEN", "")
 ADMIN_ID          = int(os.getenv("ADMIN_ID", "0"))
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON", "")
 SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID", "")
-CALENDAR_ID       = os.getenv("CALENDAR_ID", "")   # ID вашего Google Calendar
-DATABASE_URL           = os.getenv("DATABASE_URL", "")
-CONFIG_SPREADSHEET_ID  = os.getenv("CONFIG_SPREADSHEET_ID", "1e0zEfg_5el7qlxk1RwHOJmKMzi5V2gUWvMpKTYtberw")
-CARE_PDF_PATH     = "/app/care.pdf"  # путь к PDF инструкции по уходу
-YANDEX_REVIEWS    = "https://yandex.ru/maps/org/keratin_botoks/142698359718/reviews/?l=carparks&ll=30.465482%2C59.895773&source=serp_navig&z=16"
-VK_REVIEWS        = "https://vk.ru/club211270509?w=reviews"
-
-# Адрес и координаты берутся из конфига через get_address(), get_address_lat(), get_address_lon()
-# Ссылки на отзывы берутся из конфига
-# ENTRY_PHOTO = "https://..."  # ссылка на фото входа — добавьте позже
-
-# SCHEDULE, DAY_END, SLOT_DURATION, SLOT_STEP берутся из конфига
-
-KERATIN_PRICES = {
-    30: {"price": 4000, "hours": 3}, 35: {"price": 4500, "hours": 3},
-    40: {"price": 5000, "hours": 3}, 45: {"price": 5500, "hours": 4},
-    50: {"price": 6000, "hours": 4}, 55: {"price": 6500, "hours": 4},
-    60: {"price": 7000, "hours": 4}, 65: {"price": 8000, "hours": 4},
-    70: {"price": 9000, "hours": 4},
-}
-THICKNESS_PRICES = {
-    "до 5 см": 0, "5–8 см": 500, "9–13 см": 1000,
-    "более 13 см": 2000,
-}
-OTHER_SERVICES = {
-    "cold_restore":  {"name": "Холодное восстановление",           "price": 4500, "hours": 2},
-    "scalp_peeling": {"name": "Пилинг кожи головы",                "price": 1000, "hours": 1},
-    "trim_only":     {"name": "Стрижка кончиков без процедуры",     "price": 800,  "hours": 1},
-    "keratin_bangs": {"name": "Кератин чёлки",                     "price": 2000, "hours": 1},
-    "root_zone":     {"name": "Прикорневая зона*",                  "price": 4000, "hours": 2},
-}
+CALENDAR_ID       = os.getenv("CALENDAR_ID", "")
+DATABASE_URL      = os.getenv("DATABASE_URL", "")
+CARE_PDF_PATH     = "/app/care.pdf"
 
 class BookingStates(StatesGroup):
     choosing_service   = State()
@@ -574,11 +548,12 @@ async def how_to_get(message: Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="🗺 Открыть в Яндекс.Картах", url=f"https://yandex.ru/maps/?pt={get_address_lon()},{get_address_lat()}&z=17&l=map")
     await message.answer_location(latitude=get_address_lat(), longitude=get_address_lon())
+    metro = get_metro()
+    metro_line = f"\n🚇 {metro}" if metro else ""
+    how_text = get_how_to_get_text()
+    how_line = f"\n\n{how_text}" if how_text else ""
     await message.answer(
-        f"<b>Как нас найти:</b>\n\n{get_address()}\n\n"
-        f"🚇 Ближайшее метро: Улица Дыбенко\n"
-        f"🚶 От метро ~10 минут пешком\n\n"
-        f"Можно войти с обеих сторон дома, домофон 116, лифт на 8 этаж.",
+        f"<b>Как нас найти:</b>\n\n{get_address()}{metro_line}{how_line}",
         reply_markup=kb.as_markup(), parse_mode="HTML")
     # await message.answer_photo(photo=ENTRY_PHOTO, caption="Вход в подъезд")
 
@@ -716,7 +691,7 @@ async def choose_thickness(callback: CallbackQuery, state: FSMContext):
     length = int(callback.data.split("_")[1])
     await state.update_data(length=length)
     kb = InlineKeyboardBuilder()
-    for name, extra in THICKNESS_PRICES.items():
+    for name, extra in get_thickness_prices().items():
         kb.button(text=name if extra == 0 else f"{name} (+{extra} ₽)", callback_data=f"thick_{name}")
     kb.button(text="🤷 Не знаю", callback_data="thick_unknown")
     kb.button(text="◀️ Назад", callback_data="svc_keratin")
@@ -730,7 +705,7 @@ async def choose_thickness(callback: CallbackQuery, state: FSMContext):
 async def thickness_unknown(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     length = data["length"]
-    price  = KERATIN_PRICES[length]["price"]
+    price  = get_keratin_prices()[length]["price"]
     await state.update_data(thickness="уточняется у мастера", price=price,
                             hours=get_keratin_prices()[length]["hours"],
                             service_id="keratin",
@@ -831,7 +806,7 @@ async def ask_contact(callback: CallbackQuery, state: FSMContext):
         f"Дата: {data['date_display']}\n"
         f"Время: {time_str}\n"
         f"Стоимость: {'от ' if _is_price_approximate(data.get('thickness','')) else ''}{fmt_price(data['price'])}\n"
-        f"{'<i>⚠️ Ксения свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(data.get('thickness','')) else ''}\n"
+        f"{'<i>⚠️ {get_master_name()} свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(data.get('thickness','')) else ''}\n"
         f"{'<i>ℹ️ При наличии нарощенных волос доплата +1 000 ₽</i>\n' if data.get('service_id','') in get_extension_note_ids() else ''}"
         f"\nКак с вами связаться?\n"
         f"<i>Напишите номер телефона или @username в Telegram</i>",
@@ -873,7 +848,7 @@ async def finalize(message: Message, state: FSMContext):
         f"Дата: {b['date_display']}\n"
         f"Время: {b['time']}\n"
         f"Стоимость: {'от ' if _is_price_approximate(b.get('thickness','')) else ''}{fmt_price(b['price'])}\n"
-        f"{'<i>⚠️ Ксения свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(b.get('thickness','')) else ''}\n"
+        f"{'<i>⚠️ {get_master_name()} свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(b.get('thickness','')) else ''}\n"
         f"{get_address()}\n\n"
         f"Напомню за 24 ч и за 2 ч до визита 🔔",
         reply_markup=get_kb(message.from_user.id), parse_mode="HTML")

@@ -1,6 +1,6 @@
 """
 Модуль загрузки конфига из Google Sheets.
-Читает листы: config, services, schedule
+Читает листы: config, services, schedule, keratin_prices, thickness
 Кешируется при старте бота.
 """
 import logging
@@ -14,25 +14,6 @@ _services = []
 _schedule = {}
 _keratin_prices = {}
 _thickness_prices = {}
-
-KERATIN_PRICES_DEFAULT = {
-    30: {"price": 4000, "hours": 3},
-    35: {"price": 4500, "hours": 3},
-    40: {"price": 5000, "hours": 3},
-    45: {"price": 5500, "hours": 4},
-    50: {"price": 6000, "hours": 4},
-    55: {"price": 6500, "hours": 4},
-    60: {"price": 7000, "hours": 4},
-    65: {"price": 8000, "hours": 4},
-    70: {"price": 9000, "hours": 4},
-}
-
-THICKNESS_PRICES_DEFAULT = {
-    "до 5 см": 0,
-    "5–8 см": 500,
-    "9–13 см": 1000,
-    "более 13 см": 2000,
-}
 
 def get_gspread_client():
     creds_json = os.getenv("GOOGLE_CREDS_JSON", "")
@@ -49,14 +30,13 @@ def load_config():
 
     spreadsheet_id = os.getenv("CONFIG_SPREADSHEET_ID", "")
     if not spreadsheet_id:
-        logging.warning("CONFIG_SPREADSHEET_ID не задан — используются значения по умолчанию")
-        _set_defaults()
+        logging.error("CONFIG_SPREADSHEET_ID не задан — бот не может работать без конфига")
         return
 
     try:
         gc = get_gspread_client()
         if not gc:
-            _set_defaults()
+            logging.error("GOOGLE_CREDS_JSON не задан — бот не может работать без конфига")
             return
 
         wb = gc.open_by_key(spreadsheet_id)
@@ -77,9 +57,9 @@ def load_config():
                     "id":           r[0].strip(),
                     "name":         r[1].strip(),
                     "price":        int(r[2]) if r[2].strip().isdigit() else 0,
-                    "type":         r[3].strip(),  # simple / complex
-                    "price_prefix":    r[4].strip() if len(r) >= 5 else "",  # "от" или пусто
-                    "extension_note":  r[5].strip() if len(r) >= 6 else "",  # "extension_note" или пусто
+                    "type":         r[3].strip(),
+                    "price_prefix":    r[4].strip() if len(r) >= 5 else "",
+                    "extension_note":  r[5].strip() if len(r) >= 6 else "",
                 })
         logging.info(f"Services загружено: {len(_services)} услуг")
 
@@ -88,43 +68,41 @@ def load_config():
         rows = sheet.get_all_values()
         _schedule = {}
         for r in rows:
-            if len(r) >= 2 and r[0].strip().isdigit():
-                _schedule[int(r[0])] = int(r[1])
+            if len(r) >= 2 and r[0].strip().replace(".", "").isdigit():
+                _schedule[int(float(r[0]))] = int(float(r[1]))
         logging.info(f"Schedule загружен: {len(_schedule)} дней")
 
-        # Кератин и густота — пока из дефолтов (можно вынести в отдельный лист позже)
-        _keratin_prices = KERATIN_PRICES_DEFAULT
-        _thickness_prices = THICKNESS_PRICES_DEFAULT
+        # ── KERATIN_PRICES ────────────────────────────────────────────────────
+        try:
+            sheet = wb.worksheet("keratin_prices")
+            rows = sheet.get_all_values()
+            _keratin_prices = {}
+            for r in rows:
+                if len(r) >= 3 and r[0].strip().isdigit():
+                    _keratin_prices[int(r[0])] = {
+                        "price": int(r[1]),
+                        "hours": int(r[2]),
+                    }
+            logging.info(f"Keratin prices загружено: {len(_keratin_prices)} вариантов")
+        except gspread.exceptions.WorksheetNotFound:
+            logging.warning("Лист keratin_prices не найден — кератин будет без цен по длине")
+            _keratin_prices = {}
+
+        # ── THICKNESS ─────────────────────────────────────────────────────────
+        try:
+            sheet = wb.worksheet("thickness")
+            rows = sheet.get_all_values()
+            _thickness_prices = {}
+            for r in rows:
+                if len(r) >= 2 and r[0].strip() and r[1].strip().isdigit():
+                    _thickness_prices[r[0].strip()] = int(r[1])
+            logging.info(f"Thickness загружено: {len(_thickness_prices)} вариантов")
+        except gspread.exceptions.WorksheetNotFound:
+            logging.warning("Лист thickness не найден — густота не будет учитываться")
+            _thickness_prices = {}
 
     except Exception as e:
         logging.error(f"Ошибка загрузки конфига: {e}")
-        _set_defaults()
-
-def _set_defaults():
-    global _config, _services, _schedule, _keratin_prices, _thickness_prices
-    _config = {
-        "salon_name":     "Кератин&Ботокс",
-        "welcome_text":   "Привет! Я помогу вам записаться на процедуру.",
-        "address":        "Крыленко 14 стр3, домофон 116, этаж 8",
-        "address_lat":    "59.895772",
-        "address_lon":    "30.465483",
-        "yandex_reviews": "",
-        "vk_reviews":     "",
-        "slot_duration":  "5",
-        "slot_step":      "30",
-        "day_end":        "20",
-    }
-    _services = [
-        {"id": "keratin",       "name": "Кератиновое выпрямление",         "price": 0,    "type": "complex", "price_prefix": "от"},
-        {"id": "cold_restore",  "name": "Холодное восстановление",          "price": 4500, "type": "simple",  "price_prefix": ""},
-        {"id": "scalp_peeling", "name": "Пилинг кожи головы",               "price": 1000, "type": "simple",  "price_prefix": ""},
-        {"id": "trim_only",     "name": "Стрижка кончиков без процедуры",   "price": 800,  "type": "simple",  "price_prefix": ""},
-        {"id": "keratin_bangs", "name": "Кератин чёлки",                    "price": 2000, "type": "simple",  "price_prefix": ""},
-        {"id": "root_zone",     "name": "Прикорневая зона*",                "price": 4000, "type": "simple",  "price_prefix": ""},
-    ]
-    _schedule = {0: 18, 1: 18, 2: 18, 3: 18, 4: 10, 5: 10, 6: 10}
-    _keratin_prices = KERATIN_PRICES_DEFAULT
-    _thickness_prices = THICKNESS_PRICES_DEFAULT
 
 # ── ГЕТТЕРЫ ───────────────────────────────────────────────────────────────────
 def cfg(key, default=""):
@@ -155,33 +133,42 @@ def get_address():
     return f"📍 {cfg('address')}"
 
 def get_address_lat():
-    return float(cfg("address_lat", "59.895772"))
+    return float(cfg("address_lat", "0"))
 
 def get_address_lon():
-    return float(cfg("address_lon", "30.465483"))
+    return float(cfg("address_lon", "0"))
+
+def get_metro():
+    return cfg("metro", "")
+
+def get_how_to_get_text():
+    return cfg("how_to_get_text", "")
+
+def get_master_name():
+    return cfg("master_name", "Мастер")
 
 def get_admin_ids() -> list:
-    """Список ID администраторов."""
     ids_str = cfg("admin_ids", "")
     if ids_str:
         return [int(x.strip()) for x in ids_str.split(",") if x.strip().isdigit()]
-    # Фолбек на ADMIN_ID из переменных окружения
-    import os
     admin_id = os.getenv("ADMIN_ID", "0")
     return [int(admin_id)] if admin_id.isdigit() and int(admin_id) > 0 else []
 
 def get_extension_note_ids() -> set:
-    """ID услуг у которых показывается сноска про нарощенные."""
     return {s["id"] for s in _services if s.get("extension_note")}
 
 def get_notify_id() -> int:
-    """ID кому приходят уведомления о новых записях."""
     notify_str = cfg("notify_id", "")
     if notify_str.strip().isdigit():
         return int(notify_str.strip())
-    # Фолбек на первого админа
     ids = get_admin_ids()
     return ids[0] if ids else 0
+
+def get_yandex_reviews():
+    return cfg("yandex_reviews", "")
+
+def get_vk_reviews():
+    return cfg("vk_reviews", "")
 
 # Загружаем конфиг при импорте модуля
 load_config()
