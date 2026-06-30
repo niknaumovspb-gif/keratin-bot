@@ -140,7 +140,7 @@ async def db_cancel_booking(booking_id: str):
 async def db_get_user_bookings(user_id: int):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' ORDER BY date,time", user_id)
+        rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' AND date >= CURRENT_DATE ORDER BY date,time", user_id)
     return [dict(r) for r in rows]
 
 async def db_get_all_bookings():
@@ -780,7 +780,7 @@ async def assistant_answer(message: Message, state: FSMContext):
             if answer:
                 reply = answer
             else:
-                reply = "😔 На этот вопрос не нашла ответа в своей базе.\nПопробуйте переформулировать или спросите мастера напрямую."
+                reply = "😔 На этот вопрос не нашла ответа в своей базе.\nПопробуйте переформулировать или спросите мастера напрямую: @Kseniartemka"
         else:
             lines = []
             for i, item in enumerate(text_parts, 1):
@@ -788,7 +788,7 @@ async def assistant_answer(message: Message, state: FSMContext):
                 if answer:
                     lines.append(f"<b>{i}.</b> {answer}")
                 else:
-                    lines.append(f"<b>{i}.</b> 😔 На этот вопрос не нашла ответа в базе.")
+                    lines.append(f"<b>{i}.</b> 😔 На этот вопрос не нашла ответа в базе. Спросите мастера: @Kseniartemka")
             reply = "\n\n".join(lines)
         await message.answer(reply, reply_markup=_assistant_session_kb(), parse_mode="HTML")
 
