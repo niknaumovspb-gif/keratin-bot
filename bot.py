@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta, date
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -597,7 +597,7 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer(get_main_text(), reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
 
 # ── ПРАЙС ─────────────────────────────────────────────────────────────────────
-@dp.message(F.text == "💰 Прайс")
+@dp.message(F.text == "💰 Прайс", StateFilter("*"))
 @dp.message(Command("price"))
 async def show_price(message: Message):
     import os
@@ -626,7 +626,7 @@ async def show_price(message: Message):
         pass
 
 # ── КАК ПРОЙТИ ────────────────────────────────────────────────────────────────
-@dp.message(F.text == "🗺 Как пройти")
+@dp.message(F.text == "🗺 Как пройти", StateFilter("*"))
 async def how_to_get(message: Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="🗺 Открыть в Яндекс.Картах", url=f"https://yandex.ru/maps/?pt={get_address_lon()},{get_address_lat()}&z=17&l=map")
@@ -684,7 +684,7 @@ async def confirm_no(callback: CallbackQuery):
         await callback.answer("Запись не найдена.", show_alert=True)
 
 # ── МОИ ЗАПИСИ ────────────────────────────────────────────────────────────────
-@dp.message(F.text == "📋 Мои записи")
+@dp.message(F.text == "📋 Мои записи", StateFilter("*"))
 @dp.message(Command("mybookings"))
 async def my_bookings(message: Message):
     uid = message.from_user.id
@@ -844,7 +844,7 @@ async def assistant_answer(message: Message, state: FSMContext):
         args=[uid], id=job_id, replace_existing=True)
 
 # ── ЗАПИСЬ ────────────────────────────────────────────────────────────────────
-@dp.message(F.text == "💆 Записаться")
+@dp.message(F.text == "💆 Записаться", StateFilter("*"))
 async def btn_book(message: Message, state: FSMContext):
     await show_services(message, state)
 
