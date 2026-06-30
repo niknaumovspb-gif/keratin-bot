@@ -738,15 +738,14 @@ async def assistant_start(message: Message, state: FSMContext):
     await state.set_state(AssistantStates.waiting_question)
     await message.answer(
         "🤖 <b>Ассистент</b>\n\n"
-        "Задавайте любые вопросы о процедурах — отвечу на каждый.\n"
-        "Можно писать несколько вопросов сразу.\n\n"
+        "Задавайте любые вопросы о процедурах — отвечу на каждый.\n\n"
         "<i>Чтобы выйти — нажмите «🔚 Завершить» или напишите «стоп».</i>",
         reply_markup=_assistant_session_kb(), parse_mode="HTML")
 
 @dp.message(F.text == "🔚 Завершить")
 async def assistant_finish_btn(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Хорошо, если появятся вопросы — всегда здесь 😊",
+    await message.answer("Хорошо, если появятся вопросы - я всегда здесь 😊",
                          reply_markup=get_kb(message.from_user.id))
 
 @dp.message(AssistantStates.waiting_question)
@@ -756,7 +755,7 @@ async def assistant_answer(message: Message, state: FSMContext):
     # Выход по фразе
     if text.lower() in EXIT_PHRASES:
         await state.clear()
-        await message.answer("Хорошо, если появятся вопросы — всегда здесь 😊",
+        await message.answer("Хорошо, если появятся вопросы - я всегда здесь 😊",
                              reply_markup=get_kb(message.from_user.id))
         return
 
