@@ -115,6 +115,10 @@ def load_config():
                         "action":   r[2].strip() if len(r) >= 3 else "",
                     })
             logging.info(f"Knowledge загружено: {len(_knowledge)} записей")
+            if _knowledge:
+                logging.info(f"Knowledge первая запись: {_knowledge[0]}")
+            else:
+                logging.warning(f"Knowledge пустой! Сырые строки: {rows[:3]}")
         except gspread.exceptions.WorksheetNotFound:
             logging.warning("Лист knowledge не найден")
             _knowledge = []
