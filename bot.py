@@ -764,23 +764,45 @@ async def assistant_answer(message: Message, state: FSMContext):
     results = await ask_assistant(text)
     await thinking.delete()
 
-    has_action = False
+    # Разделяем ответы на обычные (текст) и с действием (прайс, запись)
+    text_parts = []
+    action_items = []
     for item in results:
+        action = item.get("action", "")
+        if action in ("show_price", "suggest_contact"):
+            action_items.append(item)
+        else:
+            text_parts.append(item)
+
+    # Склеиваем текстовые ответы в одно нумерованное сообщение
+    if text_parts:
+        if len(text_parts) == 1:
+            answer = text_parts[0].get("answer")
+            if answer:
+                reply = answer
+            else:
+                reply = "😔 На этот вопрос не нашла ответа в своей базе.\nПопробуйте переформулировать или спросите мастера напрямую."
+        else:
+            lines = []
+            for i, item in enumerate(text_parts, 1):
+                answer = item.get("answer")
+                if answer:
+                    lines.append(f"<b>{i}.</b> {answer}")
+                else:
+                    lines.append(f"<b>{i}.</b> 😔 На этот вопрос не нашла ответа в базе.")
+            reply = "\n\n".join(lines)
+        await message.answer(reply, reply_markup=_assistant_session_kb(), parse_mode="HTML")
+
+    # Ответы с действием — каждый отдельно (там прайс или кнопки)
+    import os
+    from aiogram.types import FSInputFile
+    for item in action_items:
         answer = item.get("answer")
         action = item.get("action", "")
-
-        if not answer:
-            await message.answer(
-                "😔 На этот вопрос не нашла ответа в своей базе.\n"
-                "Попробуйте переформулировать или спросите мастера напрямую.",
-                reply_markup=_assistant_session_kb())
-            continue
 
         if action == "show_price":
             if answer:
                 await message.answer(answer, reply_markup=_assistant_session_kb())
-            import os
-            from aiogram.types import FSInputFile
             mode = cfg("price_display", "both")
             if mode in ("image", "both"):
                 if os.path.exists("/app/price1.jpg"):
@@ -790,7 +812,6 @@ async def assistant_answer(message: Message, state: FSMContext):
             kb = InlineKeyboardBuilder()
             kb.button(text="💆 Записаться", callback_data="book")
             await message.answer("Хотите записаться?", reply_markup=kb.as_markup())
-            has_action = True
 
         elif action == "suggest_contact":
             kb = InlineKeyboardBuilder()
@@ -798,10 +819,6 @@ async def assistant_answer(message: Message, state: FSMContext):
             await message.answer(
                 answer + "\n\nЧтобы мастер дал персональные рекомендации — запишитесь:",
                 reply_markup=kb.as_markup())
-            has_action = True
-
-        else:
-            await message.answer(answer, reply_markup=_assistant_session_kb())
 
     # Автовыход через 10 минут — планируем задачу
     uid = message.from_user.id
