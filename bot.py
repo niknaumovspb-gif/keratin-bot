@@ -967,7 +967,7 @@ async def ask_contact(callback: CallbackQuery, state: FSMContext):
         f"Дата: {data['date_display']}\n"
         f"Время: {time_str}\n"
         f"Стоимость: {'от ' if _is_price_approximate(data.get('thickness','')) else ''}{fmt_price(data['price'])}\n"
-        f"{'<i>⚠️ {get_master_name()} свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(data.get('thickness','')) else ''}\n"
+        f"{f'<i>⚠️ {get_master_name()} свяжется с вами для уточнения суммы</i>' + chr(10) if _is_price_approximate(data.get('thickness','')) else ''}\n"
         f"{'<i>ℹ️ При наличии нарощенных волос доплата +1 000 ₽</i>\n' if data.get('service_id','') in get_extension_note_ids() else ''}"
         f"\nКак с вами связаться?\n"
         f"<i>Напишите номер телефона или @username в Telegram</i>",
@@ -1009,7 +1009,7 @@ async def finalize(message: Message, state: FSMContext):
         f"Дата: {b['date_display']}\n"
         f"Время: {b['time']}\n"
         f"Стоимость: {'от ' if _is_price_approximate(b.get('thickness','')) else ''}{fmt_price(b['price'])}\n"
-        f"{'<i>⚠️ {get_master_name()} свяжется с вами для уточнения суммы</i>\n' if _is_price_approximate(b.get('thickness','')) else ''}\n"
+        f"{f'<i>⚠️ {get_master_name()} свяжется с вами для уточнения суммы</i>' + chr(10) if _is_price_approximate(b.get('thickness','')) else ''}\n"
         f"{get_address()}\n\n"
         f"Напомню за 24 ч и за 2 ч до визита 🔔",
         reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
