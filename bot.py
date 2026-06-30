@@ -142,7 +142,12 @@ async def db_get_user_bookings(user_id: int):
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' ORDER BY date,time", user_id)
     today = date.today()
-    return [dict(r) for r in rows if r["date"] >= today]
+    result = []
+    for r in rows:
+        d = r["date"] if isinstance(r["date"], date) else datetime.strptime(str(r["date"]), "%Y-%m-%d").date()
+        if d >= today:
+            result.append(dict(r))
+    return result
 
 async def db_get_all_bookings():
     pool = await get_pool()
