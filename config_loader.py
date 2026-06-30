@@ -14,6 +14,7 @@ _services = []
 _schedule = {}
 _keratin_prices = {}
 _thickness_prices = {}
+_knowledge = []
 
 def get_gspread_client():
     creds_json = os.getenv("GOOGLE_CREDS_JSON", "")
@@ -101,6 +102,23 @@ def load_config():
             logging.warning("Лист thickness не найден — густота не будет учитываться")
             _thickness_prices = {}
 
+        # ── KNOWLEDGE ─────────────────────────────────────────────────────────
+        try:
+            sheet = wb.worksheet("knowledge")
+            rows = sheet.get_all_values()
+            _knowledge = []
+            for r in rows:
+                if len(r) >= 1 and r[0].strip():
+                    _knowledge.append({
+                        "question": r[0].strip(),
+                        "answer":   r[1].strip() if len(r) >= 2 else "",
+                        "action":   r[2].strip() if len(r) >= 3 else "",
+                    })
+            logging.info(f"Knowledge загружено: {len(_knowledge)} записей")
+        except gspread.exceptions.WorksheetNotFound:
+            logging.warning("Лист knowledge не найден")
+            _knowledge = []
+
     except Exception as e:
         logging.error(f"Ошибка загрузки конфига: {e}")
 
@@ -163,6 +181,9 @@ def get_notify_id() -> int:
         return int(notify_str.strip())
     ids = get_admin_ids()
     return ids[0] if ids else 0
+
+def get_knowledge():
+    return _knowledge
 
 def get_yandex_reviews():
     return cfg("yandex_reviews", "")

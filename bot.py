@@ -19,7 +19,7 @@ from config_loader import (load_config, cfg, get_services, get_schedule,
     get_slot_step, get_day_end, get_address, get_address_lat, get_address_lon,
     get_admin_ids, get_notify_id, get_extension_note_ids,
     get_metro, get_how_to_get_text, get_master_name,
-    get_yandex_reviews, get_vk_reviews)
+    get_yandex_reviews, get_vk_reviews, get_knowledge)
 import os
 import json
 
@@ -30,6 +30,7 @@ GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON", "")
 SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID", "")
 CALENDAR_ID       = os.getenv("CALENDAR_ID", "")
 DATABASE_URL      = os.getenv("DATABASE_URL", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 CARE_PDF_PATH     = "/app/care.pdf"
 
 class BookingStates(StatesGroup):
@@ -47,6 +48,9 @@ class AdminStates(StatesGroup):
 class RescheduleStates(StatesGroup):
     choosing_date = State()
     choosing_time = State()
+
+class AssistantStates(StatesGroup):
+    waiting_question = State()
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -501,6 +505,58 @@ def schedule_reminders(booking_id: str, b: dict):
             args=[b["user_id"], b["name"], booking_id],
             id=f"review_{booking_id}", replace_existing=True)
 
+# ── ИИ-АССИСТЕНТ ─────────────────────────────────────────────────────────────
+async def ask_assistant(user_question: str) -> dict:
+    """
+    Ищет ответ из базы knowledge через Claude.
+    Возвращает {"answer": str, "action": str} или {"answer": None} если не нашёл.
+    """
+    knowledge = get_knowledge()
+    if not knowledge or not ANTHROPIC_API_KEY:
+        return {"answer": None, "action": ""}
+
+    # Собираем базу знаний для промпта
+    kb_lines = []
+    for i, item in enumerate(knowledge):
+        kb_lines.append(f"{i+1}. Вопрос: {item['question']}\n   Ответ: {item['answer']}\n   Действие: {item['action']}")
+    kb_text = "\n\n".join(kb_lines)
+
+    prompt = f"""Ты помощник мастера по кератиновому выпрямлению волос.
+Отвечай ТОЛЬКО на основе базы знаний ниже. Не придумывай и не добавляй ничего от себя.
+
+База знаний:
+{kb_text}
+
+Вопрос клиента: {user_question}
+
+Найди в базе знаний наиболее подходящий вопрос и верни ответ в формате JSON:
+{{"answer": "текст ответа из базы", "action": "действие из базы или пустая строка"}}
+
+Если подходящего вопроса нет — верни:
+{{"answer": null, "action": ""}}
+
+Отвечай только JSON, без пояснений."""
+
+    try:
+        import anthropic
+        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        raw = message.content[0].text.strip()
+        # Убираем markdown-обёртку если есть
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        result = json.loads(raw)
+        return result
+    except Exception as e:
+        logging.error(f"Assistant error: {e}")
+        return {"answer": None, "action": ""}
+
 # ── КЛАВИАТУРЫ ────────────────────────────────────────────────────────────────
 def main_kb():
     kb = ReplyKeyboardBuilder()
@@ -508,6 +564,7 @@ def main_kb():
     kb.button(text="💰 Прайс")
     kb.button(text="📋 Мои записи")
     kb.button(text="🗺 Как пройти")
+    kb.button(text="🤖 Спросить ассистента")
     kb.adjust(2)
     return kb.as_markup(resize_keyboard=True)
 
@@ -517,6 +574,7 @@ def admin_kb():
     kb.button(text="💰 Прайс")
     kb.button(text="📋 Мои записи")
     kb.button(text="🗺 Как пройти")
+    kb.button(text="🤖 Спросить ассистента")
     kb.button(text="👑 Админ-панель")
     kb.adjust(2)
     return kb.as_markup(resize_keyboard=True)
@@ -663,6 +721,89 @@ async def cancel_booking(callback: CallbackQuery):
             logging.error(e)
     else:
         await callback.answer("Запись не найдена.", show_alert=True)
+
+# ── ИИ-АССИСТЕНТ ОБРАБОТЧИКИ ─────────────────────────────────────────────────
+@dp.message(F.text == "🤖 Спросить ассистента")
+async def assistant_start(message: Message, state: FSMContext):
+    await state.set_state(AssistantStates.waiting_question)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="◀️ Назад", callback_data="assistant_cancel")
+    await message.answer(
+        "🤖 <b>Ассистент</b>\n\n"
+        "Задайте вопрос о процедурах, уходе за волосами или противопоказаниях.\n\n"
+        "<i>Ассистент отвечает только на основе проверенной информации от мастера.</i>",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
+@dp.callback_query(F.data == "assistant_cancel")
+async def assistant_cancel(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("Хорошо, возвращаемся в меню.")
+
+@dp.message(AssistantStates.waiting_question)
+async def assistant_answer(message: Message, state: FSMContext):
+    await state.clear()
+    thinking = await message.answer("⏳ Ищу ответ...")
+
+    result = await ask_assistant(message.text.strip())
+    answer = result.get("answer")
+    action = result.get("action", "")
+
+    await thinking.delete()
+
+    if not answer:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🤖 Задать другой вопрос", callback_data="assistant_retry")
+        kb.button(text="💆 Записаться", callback_data="book")
+        kb.adjust(1)
+        await message.answer(
+            "😔 Не нашла ответа на этот вопрос в своей базе.\n\n"
+            "Попробуйте переформулировать или задайте вопрос мастеру напрямую.",
+            reply_markup=kb.as_markup())
+        return
+
+    if action == "show_price":
+        # Сначала отвечаем текстом (если есть), потом прайс + кнопка записи
+        if answer:
+            await message.answer(answer)
+        import os
+        from aiogram.types import FSInputFile
+        mode = cfg("price_display", "both")
+        if mode in ("image", "both"):
+            if os.path.exists("/app/price1.jpg"):
+                await message.answer_photo(FSInputFile("/app/price1.jpg"))
+            if os.path.exists("/app/price2.jpg"):
+                await message.answer_photo(FSInputFile("/app/price2.jpg"))
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💆 Записаться", callback_data="book")
+        kb.button(text="🤖 Ещё вопрос", callback_data="assistant_retry")
+        kb.adjust(1)
+        await message.answer("Выберите действие:", reply_markup=kb.as_markup())
+
+    elif action == "suggest_contact":
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💆 Записаться", callback_data="book")
+        kb.button(text="🤖 Ещё вопрос", callback_data="assistant_retry")
+        kb.adjust(1)
+        await message.answer(
+            f"{answer}\n\n"
+            f"Чтобы мастер дал персональные рекомендации — запишитесь на консультацию:",
+            reply_markup=kb.as_markup())
+
+    else:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🤖 Ещё вопрос", callback_data="assistant_retry")
+        kb.button(text="💆 Записаться", callback_data="book")
+        kb.adjust(1)
+        await message.answer(answer, reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "assistant_retry")
+async def assistant_retry(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(AssistantStates.waiting_question)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="◀️ Назад", callback_data="assistant_cancel")
+    await callback.message.edit_text(
+        "🤖 Задайте следующий вопрос:",
+        reply_markup=kb.as_markup())
 
 # ── ЗАПИСЬ ────────────────────────────────────────────────────────────────────
 @dp.message(F.text == "💆 Записаться")
