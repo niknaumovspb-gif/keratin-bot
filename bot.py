@@ -140,8 +140,9 @@ async def db_cancel_booking(booking_id: str):
 async def db_get_user_bookings(user_id: int):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' AND date >= $2 ORDER BY date,time", user_id, date.today())
-    return [dict(r) for r in rows]
+        rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' ORDER BY date,time", user_id)
+    today = date.today()
+    return [dict(r) for r in rows if r["date"] >= today]
 
 async def db_get_all_bookings():
     pool = await get_pool()
