@@ -27,7 +27,7 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 def load_config():
-    global _config, _services, _schedule, _keratin_prices, _thickness_prices
+    global _config, _services, _schedule, _keratin_prices, _thickness_prices, _knowledge
 
     spreadsheet_id = os.getenv("CONFIG_SPREADSHEET_ID", "")
     if not spreadsheet_id:
