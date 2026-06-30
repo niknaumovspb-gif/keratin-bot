@@ -140,7 +140,7 @@ async def db_cancel_booking(booking_id: str):
 async def db_get_user_bookings(user_id: int):
     pool = await get_pool()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' AND date >= CURRENT_DATE ORDER BY date,time", user_id)
+        rows = await conn.fetch("SELECT * FROM bookings WHERE user_id=$1 AND status='active' AND date >= $2 ORDER BY date,time", user_id, date.today())
     return [dict(r) for r in rows]
 
 async def db_get_all_bookings():
@@ -597,7 +597,7 @@ async def cmd_start(message: Message, state: FSMContext):
     await message.answer(get_main_text(), reply_markup=get_kb(message.from_user.id), parse_mode="HTML")
 
 # ── ПРАЙС ─────────────────────────────────────────────────────────────────────
-@dp.message(F.text == "💰 Прайс", StateFilter("*"))
+@dp.message(F.text == "💰 Прайс")
 @dp.message(Command("price"))
 async def show_price(message: Message):
     import os
@@ -626,7 +626,7 @@ async def show_price(message: Message):
         pass
 
 # ── КАК ПРОЙТИ ────────────────────────────────────────────────────────────────
-@dp.message(F.text == "🗺 Как пройти", StateFilter("*"))
+@dp.message(F.text == "🗺 Как пройти")
 async def how_to_get(message: Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="🗺 Открыть в Яндекс.Картах", url=f"https://yandex.ru/maps/?pt={get_address_lon()},{get_address_lat()}&z=17&l=map")
@@ -684,7 +684,7 @@ async def confirm_no(callback: CallbackQuery):
         await callback.answer("Запись не найдена.", show_alert=True)
 
 # ── МОИ ЗАПИСИ ────────────────────────────────────────────────────────────────
-@dp.message(F.text == "📋 Мои записи", StateFilter("*"))
+@dp.message(F.text == "📋 Мои записи")
 @dp.message(Command("mybookings"))
 async def my_bookings(message: Message):
     uid = message.from_user.id
@@ -844,7 +844,7 @@ async def assistant_answer(message: Message, state: FSMContext):
         args=[uid], id=job_id, replace_existing=True)
 
 # ── ЗАПИСЬ ────────────────────────────────────────────────────────────────────
-@dp.message(F.text == "💆 Записаться", StateFilter("*"))
+@dp.message(F.text == "💆 Записаться")
 async def btn_book(message: Message, state: FSMContext):
     await show_services(message, state)
 
